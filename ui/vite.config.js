@@ -4,7 +4,9 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 3000,
+    // 3000 trùng với frontend/fe (admin web) đang chạy trên máy này — đổi sang 3002 để
+    // chạy song song không đụng cổng.
+    port: 3002,
     host: '0.0.0.0', // Expose to local network
     proxy: {
       '/system': {
