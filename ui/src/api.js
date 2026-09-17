@@ -5,7 +5,14 @@
  */
 
 // docker-compose maps the gateway to host port 18080 (API_GATEWAY_PORT).
-const BACKEND = import.meta.env.VITE_API_URL || 'http://localhost:18080';
+//
+// VITE_API_URL='' (chuỗi rỗng, không phải unset) => dùng đường dẫn tương đối '/api/...',
+// đi qua proxy '/api' của chính Vite dev server (xem vite.config.js) thay vì gọi thẳng từ
+// trình duyệt. Bắt buộc khi kiosk chạy trên localhost và trỏ về API production: gọi thẳng
+// cross-origin từ trình duyệt bị CORS chặn (production không whitelist localhost), còn
+// Vite proxy chuyển tiếp phía server nên trình duyệt chỉ thấy same-origin, không dính CORS.
+// `||` sẽ coi '' là falsy nên phải so sánh với undefined tường minh.
+const BACKEND = import.meta.env.VITE_API_URL !== undefined ? import.meta.env.VITE_API_URL : 'http://localhost:18080';
 const LOCAL   = import.meta.env.VITE_LOCAL_API_URL || 'http://localhost:8000';
 
 async function req(base, method, path, body = null, token = null) {
