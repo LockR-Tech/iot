@@ -9,6 +9,11 @@ import {
   Clock, LogOut, Users, AlertTriangle, Plane, Luggage
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import boxStack3d from '../assets/illustrations/box_stack_3d.png';
+import airDelivery3d from '../assets/illustrations/air_delivery_3d.png';
+import mobilePay3d from '../assets/illustrations/mobile_pay_3d.png';
+import deliveryAnimation from '../assets/illustrations/delivery_animation.json';
+import LottieAnimation from '../components/LottieAnimation';
 
 
 // ============================================
@@ -180,14 +185,23 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
   return (
     <div className="screen screen-home-split">
       <div className="home-left">
-        <div className="home-logo">
-          <div className="icon-wrap">
-            <Lock size={48} strokeWidth={2.5} />
+        <div className="kiosk-hero-3d">
+          <div className="hero-brand-badge">
+            <span className="dot green"></span> Hệ thống thông minh 24/7
           </div>
-          <h1>Lock.R</h1>
-          <p className="sub">Hệ thống tủ thông minh</p>
+          <div className="hero-3d-visual">
+            <img src={airDelivery3d} alt="Smart Delivery" className="hero-3d-img" />
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <h1 style={{ fontSize: 36, fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px 0', background: 'linear-gradient(135deg, #0f172a 0%, #2563eb 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              Lock.R
+            </h1>
+            <p style={{ fontSize: 14, color: 'var(--text-secondary)', margin: 0, fontWeight: 500, maxWidth: 300, lineHeight: 1.5 }}>
+              Hệ thống tủ thông minh tự động — Giao nhận bưu kiện &amp; lưu trữ đồ đạc tiện lợi
+            </p>
+          </div>
         </div>
-        <div className="footer">Powered by Locker IoT</div>
+        <div className="footer">Powered by Lock.R IoT System</div>
       </div>
 
       <div className="home-right">
@@ -226,14 +240,48 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
           Kiosk sẵn sàng phục vụ
         </div>
 
-        <div className="home-actions">
-          <Btn onClick={() => go('staff')}><Unlock size={20} /> Nhập OTP / Quét QR (Mở tủ)</Btn>
-          <Btn variant="secondary" onClick={() => go('login')}><Package size={20} /> Đặt tủ trực tiếp tại Kiosk</Btn>
+        <div className="kiosk-action-cards">
+          {/* Card 1: Mở tủ */}
+          <div className="card-3d-action primary" onClick={() => go('staff')}>
+            <div className="card-3d-thumb">
+              <img src={airDelivery3d} alt="Mở tủ" />
+            </div>
+            <div className="card-3d-body">
+              <div className="card-3d-title">
+                Mở Tủ / Nhận Đồ <ChevronRight size={18} color="var(--accent)" />
+              </div>
+              <div className="card-3d-subtitle">
+                Nhập mã OTP nhận hàng hoặc Quét mã QR bưu kiện
+              </div>
+              <div className="card-3d-badge blue">
+                <KeyRound size={12} /> Mã PIN / Quét QR
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Gửi đồ / Thuê tủ */}
+          <div className="card-3d-action secondary" onClick={() => go('login')}>
+            <div className="card-3d-thumb">
+              <img src={boxStack3d} alt="Gửi đồ" />
+            </div>
+            <div className="card-3d-body">
+              <div className="card-3d-title">
+                Gửi Đồ / Thuê Tủ <ChevronRight size={18} color="#059669" />
+              </div>
+              <div className="card-3d-subtitle">
+                Lưu trữ hành lý, gửi hàng trực tiếp tại Kiosk
+              </div>
+              <div className="card-3d-badge green">
+                <Package size={12} /> {lockerInfo?.availableBoxes ?? 'Nhiều'} ô trống sẵn sàng
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
 
 // ============================================
 // LOGIN (Email + Phone toggle)
@@ -1010,23 +1058,35 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     <div className="screen">
       <Header onBack={goHome} title="Thanh toán" />
       <div style={{ maxWidth: 500, margin: '0 auto', width: '100%' }}>
-        <div className="order-sum" style={{ marginBottom: 24 }}>
+        <div className="payment-3d-hero">
+          <img src={mobilePay3d} alt="Payment" className="payment-3d-img" />
+          <div>
+            <h3 style={{ fontSize: 16, fontWeight: 800, margin: '0 0 4px 0', color: 'var(--text-primary)' }}>
+              Xác nhận thanh toán
+            </h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+              Quét mã QR tiện lợi qua ứng dụng MoMo / VNPay để mở ô tủ <strong>#{selectedBox?.boxNumber}</strong>
+            </p>
+          </div>
+        </div>
+
+        <div className="order-sum" style={{ marginBottom: 20 }}>
           <div className="order-row"><ClipboardList size={16} /> Mã đơn: <strong>{orderCode}</strong></div>
-          <div className="order-row"><KeyRound size={16} /> PIN: <strong>{orderPin}</strong></div>
-          <div className="order-row"><CreditCard size={16} /> Tổng: <strong>{fmt(totalPrice)}</strong></div>
-          {selectedBox && <div className="order-row"><Package size={16} /> Ô tủ: <strong>#{selectedBox.boxNumber}</strong></div>}
+          <div className="order-row"><KeyRound size={16} /> PIN dự phòng: <strong>{orderPin}</strong></div>
+          <div className="order-row"><CreditCard size={16} /> Cước phí: <strong style={{ color: 'var(--accent)', fontSize: 16 }}>{fmt(totalPrice)}</strong></div>
+          {selectedBox && <div className="order-row"><Package size={16} /> Ô tủ được cấp: <strong>#{selectedBox.boxNumber}</strong></div>}
         </div>
         {!payUrl && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Btn onClick={() => payOnline('MOMO')} loading={loading === 'MOMO'}>
-              <Smartphone size={18} /> Thanh toán MoMo & Mở tủ
+              <Smartphone size={18} /> Thanh toán MoMo &amp; Mở tủ
             </Btn>
-            <div className="divider" style={{ margin: '4px 0' }}>Hoặc (Demo)</div>
+            <div className="divider" style={{ margin: '4px 0' }}>Hoặc trải nghiệm nhanh</div>
             <Btn variant="secondary" onClick={skipPay} loading={loading === 'skip'}>
-              <Banknote size={18} /> Thanh toán Tiền mặt (Demo)
+              <Banknote size={18} /> Thanh toán Tiền mặt (Demo mở tủ)
             </Btn>
             <Btn variant="outline" onClick={() => payOnline('VNPAY')} loading={loading === 'VNPAY'}>
-              <CreditCard size={18} /> Thanh toán VNPay
+              <CreditCard size={18} /> Cổng thanh toán VNPay
             </Btn>
           </div>
         )}
@@ -1339,44 +1399,39 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 // ============================================
 function SuccessScreen({ goHome, title, msg, extra, countdown }) {
   return (
-    <div className="screen success-screen" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center', background: 'radial-gradient(circle at 50% 30%, rgba(52, 211, 153, 0.1) 0%, var(--bg) 70%)' }}>
-      <div className="success-icon-wrap" style={{ 
-        width: 100, height: 100, marginBottom: 24, 
-        background: 'linear-gradient(135deg, #34d399 0%, #10b981 100%)', 
-        color: '#fff', boxShadow: '0 12px 32px rgba(16, 185, 129, 0.3)',
-        border: 'none'
-      }}>
-        <CheckCircle size={56} strokeWidth={2.5} />
+    <div className="screen success-screen" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center', background: 'radial-gradient(circle at 50% 30%, rgba(52, 211, 153, 0.12) 0%, var(--bg) 70%)' }}>
+      <div className="lottie-success-wrap">
+        <LottieAnimation animationData={deliveryAnimation} className="lottie-player-inner" />
       </div>
       
-      <h2 style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 12 }}>{title}</h2>
-      <p style={{ fontSize: 16, color: 'var(--text-secondary)', maxWidth: 400, lineHeight: 1.5 }}>{msg}</p>
+      <h2 style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>{title}</h2>
+      <p style={{ fontSize: 15, color: 'var(--text-secondary)', maxWidth: 420, lineHeight: 1.5 }}>{msg}</p>
 
       {extra && (
         <div className="extra-card" style={{ 
-          marginTop: 32, width: '100%', maxWidth: 440, padding: '24px',
+          marginTop: 24, width: '100%', maxWidth: 440, padding: '20px 24px',
           background: '#fff', borderRadius: 20, border: '1px solid var(--border)',
-          boxShadow: '0 16px 40px rgba(0,0,0,0.06)', gap: 16
+          boxShadow: '0 16px 40px rgba(0,0,0,0.06)', gap: 14
         }}>
           {extra.orderCode && (
-            <div className="extra-row" style={{ justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', paddingBottom: 12 }}>
+            <div className="extra-row" style={{ justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', paddingBottom: 10 }}>
               <span style={{ color: 'var(--text-muted)' }}>Mã đơn hàng:</span>
-              <strong style={{ fontSize: 16 }}>{extra.orderCode}</strong>
+              <strong style={{ fontSize: 15 }}>{extra.orderCode}</strong>
             </div>
           )}
           {extra.boxNumber && (
-            <div className="extra-row" style={{ justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', paddingBottom: 12 }}>
-              <span style={{ color: 'var(--text-muted)' }}>Ô tủ của bạn:</span>
-              <strong style={{ fontSize: 20, color: 'var(--accent)' }}>#{extra.boxNumber}</strong>
+            <div className="extra-row" style={{ justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', paddingBottom: 10 }}>
+              <span style={{ color: 'var(--text-muted)' }}>Ô tủ đã mở:</span>
+              <strong style={{ fontSize: 24, color: 'var(--success)', fontWeight: 900 }}>Ô #{extra.boxNumber}</strong>
             </div>
           )}
           {extra.orderPin && (
-            <div className="extra-row" style={{ justifyContent: 'space-between', flexDirection: 'column', gap: 8, paddingTop: 8 }}>
-              <span style={{ color: 'var(--text-muted)' }}>Mã PIN để mở tủ lấy đồ:</span>
+            <div className="extra-row" style={{ justifyContent: 'space-between', flexDirection: 'column', gap: 6, paddingTop: 6 }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Mã PIN để mở lại tủ khi nhận đồ:</span>
               <div style={{ 
-                background: 'var(--accent-dim)', padding: '12px 24px', 
+                background: 'var(--accent-dim)', padding: '10px 20px', 
                 borderRadius: 12, border: '2px dashed rgba(59, 130, 246, 0.4)',
-                fontSize: 28, fontWeight: 800, color: 'var(--accent)', letterSpacing: 4
+                fontSize: 26, fontWeight: 800, color: 'var(--accent)', letterSpacing: 4
               }}>
                 {extra.orderPin}
               </div>
@@ -1385,9 +1440,9 @@ function SuccessScreen({ goHome, title, msg, extra, countdown }) {
         </div>
       )}
 
-      <div style={{ marginTop: 40, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, width: '100%', maxWidth: 320 }}>
-        <Btn onClick={goHome} variant="primary" style={{ height: 56, fontSize: 18 }}><Home size={20} /> Về trang chủ</Btn>
-        <p className="countdown" style={{ fontSize: 14 }}>Tự động đóng sau <strong>{countdown}</strong> giây</p>
+      <div style={{ marginTop: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, width: '100%', maxWidth: 320 }}>
+        <Btn onClick={goHome} variant="primary" style={{ height: 52, fontSize: 17 }}><Home size={20} /> Về trang chủ</Btn>
+        <p className="countdown" style={{ fontSize: 13 }}>Tự động đóng sau <strong>{countdown}</strong> giây</p>
       </div>
     </div>
   );
