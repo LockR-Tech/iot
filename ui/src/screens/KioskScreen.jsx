@@ -1283,8 +1283,9 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
         setMsg(res.data?.message || res.message || 'Mã không hợp lệ hoặc đã hết hạn');
         setTimeout(() => setCode(''), 2000);
       }
-    } catch {
-      setMsg('Lỗi kết nối server');
+    } catch (err) {
+      console.error('[CODE] Error:', err);
+      setMsg(err?.message ? `Lỗi: ${err.message}` : 'Lỗi kết nối server');
       setTimeout(() => setCode(''), 2000);
     }
     setLoading(false);
@@ -1296,6 +1297,11 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
       <p className="subtitle" style={{ textAlign: 'center' }}>
         Nhập mã OTP từ App Mobile, mã PIN hoặc mã QR để mở tủ
       </p>
+      {lockerInfo && (
+        <div style={{ textAlign: 'center', marginTop: -12, marginBottom: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
+          Tủ hiện tại: <strong style={{ color: 'var(--accent)' }}>{lockerInfo.name || lockerInfo.storeName}</strong> ({lockerInfo.code})
+        </div>
+      )}
 
       <div className="form-group" style={{ marginTop: 24, marginBottom: 32, maxWidth: 450, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
         <input

@@ -12,7 +12,10 @@
 // cross-origin từ trình duyệt bị CORS chặn (production không whitelist localhost), còn
 // Vite proxy chuyển tiếp phía server nên trình duyệt chỉ thấy same-origin, không dính CORS.
 // `||` sẽ coi '' là falsy nên phải so sánh với undefined tường minh.
-const BACKEND = import.meta.env.VITE_API_URL !== undefined ? import.meta.env.VITE_API_URL : 'http://localhost:18080';
+// Mặc định dùng chuỗi rỗng '' => dùng đường dẫn tương đối '/api/...',
+// đi qua proxy '/api' của Vite dev server (xem vite.config.js) trỏ về backend production https://api.locker-drone.tech.
+// Tránh lỗi CORS và không phụ thuộc vào gateway local port 18080 khi test Kiosk.
+const BACKEND = import.meta.env.VITE_API_URL || '';
 const LOCAL   = import.meta.env.VITE_LOCAL_API_URL || 'http://localhost:8000';
 
 async function req(base, method, path, body = null, token = null) {
