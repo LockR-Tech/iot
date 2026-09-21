@@ -636,7 +636,27 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
   };
 
   const endManageBox = async () => {
-    alert('Vui lòng dùng Mobile App để xác nhận kết thúc thuê sau khi đã lấy đồ và đóng tủ.');
+    const order = manageBox.order;
+    if (String(order.type || '').toUpperCase() !== 'RENTAL') {
+      alert('Chỉ đơn thuê ô mới kết thúc được tại đây.');
+      return;
+    }
+    if (!window.confirm('Bạn đã lấy hết đồ và đóng cửa ô? Kết thúc thuê sẽ trả ô lại.')) return;
+    setManageLoading(true);
+    try {
+      const res = await api.endRental(jwt, order.id);
+      if (res.success) {
+        alert('Đã kết thúc thuê. Ô đã được trả lại.');
+        setManageBox(null);
+        await fetchData();
+      } else {
+        alert(res.data?.message || res.message || 'Không kết thúc thuê được');
+      }
+    } catch (e) {
+      alert('Lỗi kết nối máy chủ');
+    } finally {
+      setManageLoading(false);
+    }
   };
 
   const notImplemented = () => {
@@ -829,7 +849,8 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
       const payload = {
         lockerId: activeLockerId,
         boxId: selectedBox.boxId,   // LockerBoxSummary.boxId (không phải .id)
-        cellType: 'STANDARD',
+        // Giá thuê tính theo loại ô: chỉ XL có giá riêng, còn lại tính như STANDARD.
+        cellType: selectedBox.cellType === 'XL' ? 'XL' : 'STANDARD',
         hours: hours,
         note: note || undefined,
         promotionCode: (promoApplied && promoCode.trim()) ? promoCode.trim() : undefined,
@@ -955,6 +976,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
   const [payMethod, setPayMethod] = useState('');
   const [msg, setMsg] = useState('');
   const [polling, setPolling] = useState(false);
+  const [dropOpened, setDropOpened] = useState(false);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -963,41 +985,38 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
   const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
 
-  const successExtra = { orderCode, orderPin, boxNumber: selectedBox?.boxNumber };
+  // Thanh toán được ghi nhận bất đồng bộ (qua sự kiện payment → order), nên phải đợi đơn
+  // thật sự PAID rồi mới mở ô — backend từ chối mở ô bỏ hàng khi đơn chưa thanh toán.
+  const waitUntilPaid = async (timeoutMs = 15000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const res = await api.getOrderStatus(orderId, jwt);
+        if (res.success && res.data?.isPaid) return true;
+      } catch { /* thử lại */ }
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    return false;
+  };
 
-  // Với RENTAL: confirm order để chuyển sang STORING (bắt buộc với RENTAL flow)
-  const confirmOrder = async () => {
-    try {
-      const res = await api.confirmOrder(jwt, orderId);
-      if (!res.success) {
-        setMsg(res.data?.message || res.message || 'Bắt đầu kỳ thuê thất bại. Vui lòng thử lại trên mobile app.');
-        return false;
-      }
-      console.log('%c[ORDER] ✅ RENTAL confirmed → STORING', 'color:#4ade80');
-      return true;
-    } catch (e) {
-      console.warn('[ORDER] ⚠️ Confirm failed:', e.message);
-      setMsg('Bắt đầu kỳ thuê thất bại. Vui lòng thử lại trên mobile app.');
-      return false;
+  // Mở ô để bỏ đồ; xác nhận "đã bỏ đồ" là bước riêng sau khi khách đặt đồ vào.
+  const openForDrop = async () => {
+    const res = await api.unlockBox(activeLockerId, orderPin, selectedBox?.boxId, 'DROP_OFF');
+    if (res.success && res.data?.accepted) {
+      setDropOpened(true);
+    } else {
+      setMsg(res.data?.message || res.message || 'Lỗi mở tủ');
     }
   };
 
   const skipPay = async () => {
-    setLoading('skip');
-    console.log('%c[UNLOCK] Skip pay → unlock box (RENTAL DROP_OFF):', 'color:#fbbf24', { pin: orderPin, boxId: selectedBox?.boxId });
+    setLoading('skip'); setMsg('');
     try {
-      // Gọi checkout tiền mặt (mock) để order được đánh dấu PAID trước khi confirm
       await api.mockPaymentCheckout(jwt, orderId).catch(() => {});
-      
-      const res = await api.unlockBox(activeLockerId, orderPin, selectedBox?.boxId, 'DROP_OFF');
-      if (res.success && res.data?.accepted) {
-        if (await confirmOrder()) {
-          showSuccess('Tủ đã mở!',
-            `Vui lòng đặt đồ vào ô tủ và đóng cửa. Dùng mã PIN ${orderPin} để mở lại tủ khi lấy đồ.`,
-            successExtra);
-        }
+      if (!(await waitUntilPaid())) {
+        setMsg('Chưa ghi nhận được thanh toán. Vui lòng thử lại sau giây lát.');
       } else {
-        setMsg(res.data?.message || res.message || 'Lỗi mở tủ');
+        await openForDrop();
       }
     } catch { setMsg('Lỗi kết nối'); }
     setLoading('');
@@ -1037,22 +1056,26 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
   };
 
   const openAfterPay = async () => {
-    setLoading('open');
+    setLoading('open'); setMsg('');
     if (pollRef.current) { clearInterval(pollRef.current); setPolling(false); }
     try {
-      const res = await api.unlockBox(activeLockerId, orderPin, selectedBox?.boxId, 'DROP_OFF');
-      if (res.success && res.data?.accepted) {
-        if (await confirmOrder()) {
-          showSuccess('Thanh toán thành công!',
-            `Tủ đã mở. Vui lòng đặt đồ vào ô #${selectedBox?.boxNumber} và đóng cửa. PIN: ${orderPin}`,
-            successExtra);
-        }
-      } else {
-        setMsg(res.data?.message || res.message || 'Lỗi mở tủ');
-      }
+      await openForDrop();
     } catch { setMsg('Lỗi kết nối'); }
     setLoading('');
   };
+
+  if (dropOpened) {
+    return (
+      <AfterOpenPanel
+        nextStep="CONFIRM_DROP"
+        accessCode={orderPin}
+        lockerId={activeLockerId}
+        boxLabel={selectedBox?.boxNumber}
+        showSuccess={showSuccess}
+        goHome={goHome}
+        dropDoneMessage={`Đã bắt đầu thuê. Dùng mã PIN ${orderPin} để mở lại ô trong thời gian thuê.`} />
+    );
+  }
 
   return (
     <div className="screen">
@@ -1141,6 +1164,76 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 }
 
 // ============================================
+// SAU KHI Ô MỞ BẰNG MÃ
+// ============================================
+// Backend trả `nextStep` khi mở ô: CONFIRM_DROP (vừa mở để bỏ hàng — hỏi đã bỏ xong chưa),
+// RENTAL_ACCESS (ô đang thuê — dùng tiếp hay kết thúc thuê). Hai thao tác này chỉ dùng mã,
+// backend chấp nhận vì ô của đơn vừa được mở thành công.
+function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess, goHome, dropDoneMessage }) {
+  const [loading, setLoading] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const run = async (key, action, title, message) => {
+    setLoading(key); setMsg('');
+    try {
+      const res = await action(lockerId, accessCode);
+      if (res.success && res.data?.accepted) {
+        showSuccess(title, message || res.data.message, { boxNumber: boxLabel });
+      } else {
+        setMsg(res.data?.message || res.message || 'Không thực hiện được, vui lòng thử lại');
+      }
+    } catch {
+      setMsg('Lỗi kết nối server');
+    }
+    setLoading('');
+  };
+
+  const panel = { maxWidth: 450, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 12 };
+
+  if (nextStep === 'CONFIRM_DROP') {
+    return (
+      <div className="screen">
+        <Header onBack={goHome} title={`Ô Tủ #${boxLabel}`} />
+        <p className="subtitle" style={{ textAlign: 'center' }}>
+          Ô đã mở. Đặt đồ vào ô, <strong>đóng cửa</strong> rồi bấm xác nhận.
+        </p>
+        <div style={panel}>
+          <Btn onClick={() => run('drop', api.confirmDropWithCode, 'Đã bỏ hàng!', dropDoneMessage)} loading={loading === 'drop'}>
+            <CheckCircle size={18} /> Đã bỏ hàng xong
+          </Btn>
+          <Btn variant="secondary" onClick={goHome} disabled={!!loading}>
+            Để sau — xác nhận trên ứng dụng
+          </Btn>
+          {msg && <Msg type="error" text={msg} />}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="screen">
+      <Header onBack={goHome} title={`Ô Tủ #${boxLabel}`} />
+      <p className="subtitle" style={{ textAlign: 'center' }}>
+        Ô đã mở. Bạn vẫn đang thuê ô này — lấy hoặc cất đồ rồi đóng cửa.
+      </p>
+      <div style={panel}>
+        <Btn
+          onClick={() => showSuccess('Đã mở khóa!', 'Nhớ đóng cửa ô. Mã PIN vẫn dùng được tới khi hết hạn thuê.', { boxNumber: boxLabel })}
+          disabled={!!loading}>
+          <Unlock size={18} /> Đóng cửa, tiếp tục thuê
+        </Btn>
+        <Btn variant="secondary" onClick={() => run('end', api.endRentalWithCode, 'Đã kết thúc thuê!')} loading={loading === 'end'}>
+          <LogOut size={18} /> Lấy hết đồ &amp; kết thúc thuê
+        </Btn>
+        {msg && <Msg type="error" text={msg} />}
+      </div>
+    </div>
+  );
+}
+
+const needsFollowUp = (nextStep) => nextStep === 'CONFIRM_DROP' || nextStep === 'RENTAL_ACCESS';
+
+// ============================================
 // PIN
 // ============================================
 function PinScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
@@ -1152,6 +1245,7 @@ function PinScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
   const [loading, setLoading] = useState(false);
   const [pinState, setPinState] = useState('');
   const [msg, setMsg] = useState('');
+  const [afterOpen, setAfterOpen] = useState(null);
 
   const pressBoxKey = (num) => {
     if (boxNum.length >= 3) return;
@@ -1202,7 +1296,10 @@ function PinScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 
       if (verifyRes.success && verifyRes.data?.valid) {
         const unlockRes = await api.unlockBox(activeLockerId, code, selectedBox.boxId, 'PICKUP');
-        if (unlockRes.success && unlockRes.data?.accepted) {
+        if (unlockRes.success && unlockRes.data?.accepted && needsFollowUp(unlockRes.data?.nextStep)) {
+          setPinState('success');
+          setAfterOpen({ nextStep: unlockRes.data.nextStep, code, boxLabel: selectedBox.boxNumber });
+        } else if (unlockRes.success && unlockRes.data?.accepted) {
           setPinState('success');
           const oCode = verifyRes.data?.orderCode || unlockRes.data?.orderCode || '';
           setTimeout(() => showSuccess(
@@ -1231,6 +1328,18 @@ function PinScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
     }
     setLoading(false);
   };
+
+  if (afterOpen) {
+    return (
+      <AfterOpenPanel
+        nextStep={afterOpen.nextStep}
+        accessCode={afterOpen.code}
+        lockerId={activeLockerId}
+        boxLabel={afterOpen.boxLabel}
+        showSuccess={showSuccess}
+        goHome={goHome} />
+    );
+  }
 
   if (step === 1) {
     return (
@@ -1309,6 +1418,7 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  const [afterOpen, setAfterOpen] = useState(null);
 
   // The backend answers with boxId; the kiosk knows the layout, so show the
   // human-friendly box number when it can.
@@ -1330,7 +1440,13 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 
       const res = await api.unlockWithCode(activeLockerId, accessCode);
 
-      if (res.success && res.data?.accepted) {
+      if (res.success && res.data?.accepted && needsFollowUp(res.data?.nextStep)) {
+        setAfterOpen({
+          nextStep: res.data.nextStep,
+          code: accessCode,
+          boxLabel: res.data?.boxId ? boxNumberOf(res.data.boxId) : '',
+        });
+      } else if (res.success && res.data?.accepted) {
         setTimeout(() => showSuccess(
           'Đã mở khóa!',
           'Hộp đã được mở. Vui lòng đóng cửa khi xong.',
@@ -1350,6 +1466,18 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
     }
     setLoading(false);
   };
+
+  if (afterOpen) {
+    return (
+      <AfterOpenPanel
+        nextStep={afterOpen.nextStep}
+        accessCode={afterOpen.code}
+        lockerId={activeLockerId}
+        boxLabel={afterOpen.boxLabel}
+        showSuccess={showSuccess}
+        goHome={goHome} />
+    );
+  }
 
   return (
     <div className="screen">
