@@ -78,6 +78,12 @@ export const createPayment     = (token, orderId, method) => be('POST', '/api/pa
 export const verifyPin         = (pinCode, boxId)     => be('POST', '/api/iot/verify-pin', { pinCode, boxId });
 export const unlockBox         = (lockerId, pinCode, boxId, actionType) => be('POST', '/api/iot/unlock', { lockerId, pinCode, boxId, actionType });
 export const unlockWithCode    = (lockerId, accessCode)         => be('POST', '/api/iot/unlock-with-code', { lockerId, code: accessCode });
+// Sau khi ô đã mở bằng mã: xác nhận bỏ hàng / kết thúc thuê ngay tại tủ (không cần đăng nhập,
+// backend chỉ nhận khi ô của đơn vừa được mở thành công).
+export const confirmDropWithCode = (lockerId, accessCode)       => be('POST', '/api/iot/confirm-drop-with-code', { lockerId, code: accessCode });
+export const endRentalWithCode   = (lockerId, accessCode)       => be('POST', '/api/iot/end-rental-with-code', { lockerId, code: accessCode });
+// Người thuê đã đăng nhập trên kiosk kết thúc lượt thuê.
+export const endRental         = (token, orderId)     => be('POST', `/api/orders/${orderId}/pickup-storage`, null, token);
 export const pickupOrder       = (orderId, token)     => be('POST', '/api/iot/pickup', { orderId }, token);
 
 // ─── Local FastAPI (IoT Gateway) ─────────────────────────────
