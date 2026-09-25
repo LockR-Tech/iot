@@ -11,7 +11,7 @@ import sys
 # ─── CẤU HÌNH ───
 PORT = "/dev/ttyUSB0"    # Đổi lại nếu port khác
 BAUD = 9600
-SLAVE_ID = 2
+SLAVE_ID = 1          # Khớp #define SLAVE_ID trong locker_controller.ino
 
 def test_ping(ser, label: str):
     """Gửi PING và đọc response."""

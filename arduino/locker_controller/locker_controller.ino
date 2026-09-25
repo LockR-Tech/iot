@@ -9,11 +9,20 @@ const int RS485_BAUD       = 9600;
 SoftwareSerial RS485Serial(SSerialRX, SSerialTX);
 
 // ─── Slave Config ───
-#define SLAVE_ID 2  // Cần thay đổi ID duy nhất cho mỗi Arduino trên cùng bus
+// Mỗi Arduino trên cùng bus RS485 mang một ID riêng. Pi quét từ 1 tới
+// settings.MAX_CABINETS (mặc định 1, xem discovery_service.py:29) nên board của tủ
+// đầu tiên phải là 1; board thứ hai mới đặt 2.
+#define SLAVE_ID 1
 
 // ─── Pin Mapping ───
-const int LOCK_PINS[]     = {2,  4,  5};
-const int MAGNETIC_PINS[] = {11, 12, A0};
+// 7 ngăn theo sơ đồ đấu nối của tủ (relay IN1…IN7 + 7 cặp dây tín hiệu khoá).
+// Thứ tự slot đi theo thứ tự dây trên thanh domino tín hiệu: nhìn từ sau tủ, từ phải
+// qua trái — xem docs/03-hardware/cabinet-wiring-spec.md § 2 và § 5.
+// Chân đã bận: D0/D1 (USB debug), D6/D7/D9 (RS485).
+// KHÔNG dùng D13 cho khoá — bootloader nháy LED trên chân đó mỗi lần reset, relay sẽ
+// kêu tách và khoá giật. A0–A5 trên Uno dùng được như chân số bình thường.
+const int LOCK_PINS[]     = { 2,  4,  5,  3,  8, 10, A5};
+const int MAGNETIC_PINS[] = {11, 12, A0, A1, A2, A3, A4};
 const int NUM_SLOTS       = sizeof(LOCK_PINS) / sizeof(LOCK_PINS[0]);
 // Số lượng slot thực tế đang gắn hardware (để in log ALIVE chính xác)
 const int ACTIVE_SLOTS    = NUM_SLOTS;
@@ -31,9 +40,11 @@ char cmdBuffer[32];
 int  cmdIndex = 0;
 
 // ─── Magnetic sensor state tracking ───
-bool     doorClosed[6];           // true = cửa đóng (sensor LOW)
-bool     prevDoorClosed[6];       // trạng thái trước đó (để detect edge)
-unsigned long lastDebounce[6];    // timestamp debounce
+// Kích thước bám NUM_SLOTS: mọi vòng lặp bên dưới chạy tới NUM_SLOTS, khai cứng số
+// khác là ghi tràn mảng ngay khi thêm ngăn.
+bool     doorClosed[NUM_SLOTS];        // true = cửa đóng (sensor LOW)
+bool     prevDoorClosed[NUM_SLOTS];    // trạng thái trước đó (để detect edge)
+unsigned long lastDebounce[NUM_SLOTS]; // timestamp debounce
 const unsigned long DEBOUNCE_MS = 200;
 
 // ─── Sensor polling interval ───
