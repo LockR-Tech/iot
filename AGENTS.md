@@ -19,6 +19,7 @@ Repo này thuộc hệ thống **Lock.R** (org [LockR-Tech](https://github.com/L
 ## Riêng repo này
 
 - **Không có CI/CD.** Cập nhật tủ thật = SSH vào Raspberry Pi, `git pull`, khởi động lại dịch vụ. Cần phần cứng thật (Pi + Arduino RS485) để thử đường mở khoá vật lý.
+- **Tủ vật lý:** sơ đồ đấu nối của nhà cung cấp + đối chiếu chân Arduino trong firmware ở `../docs/03-hardware/cabinet-wiring-spec.md`; chuẩn bị Pi, thứ tự nối dây, bring-up và kiosk trên Pi ở `../docs/03-hardware/controller-wiring-guide.md`. Firmware mới khai 3 ngăn, trần 6 (`MAX_SLOTS`) — tủ 7 ngăn phải nâng trước; bản build kiosk cần `base: '/ui/'`.
 - **Thành phần:** `main.py` (Pi controller: serial RS485, MQTT, heartbeat, FastAPI :8000) · `arduino/locker_controller/` (sketch, `SLAVE_ID` đặt riêng từng board) · `ui/` (kiosk React, gọi thẳng API production) · `simulate_demo_cabinet.py` (giả lập tủ khớp hợp đồng MQTT của backend).
 - **Lệnh:** `uv sync` · `docker compose -f docker-compose.postgres.yml up -d` · `SIMULATION=true uv run python main.py` (không cần Arduino) · `uv run python simulate_demo_cabinet.py` · kiosk: `cd ui && npm install && npm run dev`.
 - ⚠ Hợp đồng MQTT **lệch** giữa backend và `main.py`: backend gửi `{commandId, box_id, action}` tới `cabinet/{lockerId}/command/open`, còn Pi cần `slotIndex` và dùng **tên** tủ trong topic. Hiện chỉ bộ giả lập chạy end-to-end — gap F2-G09.
