@@ -15,8 +15,10 @@ except ImportError:
     SERIAL_AVAILABLE = False
     logger.error("pyserial not available! Real hardware communication will not work.")
 
-# Số slot tối đa (Arduino Uno: 6 lock + 6 magnetic)
-MAX_SLOTS = 6
+# Số slot tối đa mỗi Arduino. Tủ hiện tại 7 ngăn (relay IN1…IN7), Uno còn đủ chân —
+# xem docs/03-hardware/cabinet-wiring-spec.md § 5. Đổi số này phải đổi kèm LOCK_PINS /
+# MAGNETIC_PINS trong arduino/locker_controller/locker_controller.ino.
+MAX_SLOTS = 7
 
 
 class SerialManager:
@@ -290,11 +292,11 @@ class SerialManager:
     def scan_slaves(self, range_start: int = 1, range_end: int = 1) -> list:
         """
         Quét bus RS485 để tìm các Slave Arduino hoạt động.
-        Trả về list: [{"slaveId": N, "availableSlots": 6}, ...]
+        Trả về list: [{"slaveId": N, "availableSlots": 7}, ...]
         """
         if self.simulation:
             return [
-                {"slaveId": 1, "availableSlots": 6}
+                {"slaveId": 1, "availableSlots": MAX_SLOTS}
             ]
         
         found = []
