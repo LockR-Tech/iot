@@ -1,11 +1,11 @@
 import json
-import time
 import threading
-import platform
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Optional
 from config.settings import settings
 from domain.enums import CommandAction, LockerHwState
-from domain.models import OpenAckPayload
 from services.setup_handler import SetupHandler
 from utils.logger import get_logger
 
@@ -13,6 +13,17 @@ logger = get_logger("LockerService")
 
 
 class LockerService:
+    """
+    Điều phối lệnh MQTT ↔ phần cứng theo hợp đồng ADR-0008
+    (docs/01-overview/mqtt-contract.md):
+
+        cabinet/{lockerId}/command/open|close|sync   ← backend
+        cabinet/{lockerId}/command/open/result        → backend (khớp commandId)
+        cabinet/{lockerId}/locker/{slotIndex}/status  → backend (sự kiện cửa)
+        iot/{mac}/command/setup|clear-setup           ← backend (admin gán tủ)
+        iot/{mac}/discovery/start                     ← backend
+    """
+
     def __init__(self, mqtt_client, hardware_controller,
                  serial_manager=None, cabinet_state=None,
                  heartbeat_service=None, db_manager=None,
@@ -25,7 +36,9 @@ class LockerService:
         self.db = db_manager
         self.discovery = discovery_service
 
-        self.active_commands = {}
+        # Lệnh phần cứng chạy tuần tự trên một luồng riêng: một lần mở mất ~3 s,
+        # chạy thẳng trong callback MQTT sẽ chặn cả vòng lặp mạng của paho.
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="LockerCmd")
 
         # Setup handler (nếu có serial manager)
         self.setup_handler = None
@@ -37,7 +50,34 @@ class LockerService:
                 on_setup_complete=self._on_setup_complete,
             )
 
+        if self.cabinet_state:
+            self.cabinet_state.add_listener(self._on_cabinets_changed)
+
         self._start_time = time.time()
+
+    # ═══════════════════════════════════════════════════════════
+    #  SUBSCRIPTIONS
+    # ═══════════════════════════════════════════════════════════
+
+    def command_topics(self) -> set:
+        """Topic lệnh vận hành của mọi tủ đang phục vụ."""
+        if not self.cabinet_state:
+            return set()
+        return {f"cabinet/{cab['id']}/command/+" for cab in self.cabinet_state.all_cabinets}
+
+    def refresh_subscriptions(self):
+        topics = self.command_topics()
+        self.mqtt.set_subscriptions(topics)
+        if not topics:
+            logger.warning("Chưa phục vụ tủ nào — chờ admin gán Pi vào tủ, hoặc đặt LOCKER_ID trong .env")
+
+    def _on_cabinets_changed(self):
+        self.refresh_subscriptions()
+        if self.heartbeat:
+            if self.cabinet_state.is_configured:
+                self.heartbeat.start()
+            else:
+                self.heartbeat.stop()
 
     # ═══════════════════════════════════════════════════════════
     #  MESSAGE ROUTING
@@ -47,10 +87,12 @@ class LockerService:
         """
         Xử lý messages từ MQTT.
         Topics:
-            cabinet/{cabinetName}/command/setup
-            cabinet/{cabinetName}/command/open
-            cabinet/{cabinetName}/command/close
+            iot/{macAddress}/command/setup
+            iot/{macAddress}/command/clear-setup
             iot/{macAddress}/discovery/start
+            cabinet/{lockerId}/command/open
+            cabinet/{lockerId}/command/close
+            cabinet/{lockerId}/command/sync
         """
         try:
             # Log MQTT message to database
@@ -68,8 +110,8 @@ class LockerService:
                         max_cabinets = data.get("maxCabinets")
                     except Exception:
                         pass
-                        
-                    threading.Thread(target=self.discovery.discover_and_report, 
+
+                    threading.Thread(target=self.discovery.discover_and_report,
                                      args=(max_cabinets,), daemon=True).start()
                 else:
                     logger.error("Discovery service not available in LockerService")
@@ -78,6 +120,9 @@ class LockerService:
             data = json.loads(payload_str)
         except json.JSONDecodeError:
             logger.error(f"Invalid JSON payload on {topic}")
+            return
+        if not isinstance(data, dict):
+            logger.error(f"Payload on {topic} is not a JSON object")
             return
 
         # ─── Route: Setup command ───
@@ -90,17 +135,32 @@ class LockerService:
             self._handle_clear_setup_command(topic, data)
             return
 
-        # ─── Route: Open command ───
-        if "/command/open" in topic:
-            self._handle_open_command(topic, data)
+        parts = topic.split("/")
+        if len(parts) != 4 or parts[0] != "cabinet" or parts[2] != "command":
+            logger.debug(f"Unhandled topic: {topic}")
             return
 
-        # ─── Route: Close command ───
-        if "/command/close" in topic:
-            self._handle_close_command(topic, data)
+        cab = self.cabinet_state.get_cabinet_by_id(parts[1]) if self.cabinet_state else None
+        if not cab:
+            logger.error(f"Command for locker {parts[1]} ignored – Pi is not serving that locker")
             return
 
-        logger.debug(f"Unhandled topic: {topic}")
+        action = parts[3]
+        if action == "open":
+            self._executor.submit(self._safe, self._handle_open_command, cab, data)
+        elif action == "close":
+            self._executor.submit(self._safe, self._handle_close_command, cab, data)
+        elif action == "sync":
+            self._handle_sync_command(cab, data)
+        else:
+            logger.debug(f"Unhandled command: {topic}")
+
+    @staticmethod
+    def _safe(fn, *args):
+        try:
+            fn(*args)
+        except Exception as e:
+            logger.error(f"Command handler {fn.__name__} failed: {e}", exc_info=True)
 
     # ═══════════════════════════════════════════════════════════
     #  SETUP COMMAND (BE → RPi)
@@ -141,225 +201,176 @@ class LockerService:
     # ═══════════════════════════════════════════════════════════
 
     def _handle_clear_setup_command(self, topic: str, data: dict):
-        """Xoá toàn bộ cấu hình."""
+        """Xoá toàn bộ cấu hình (quay về LOCKER_ID trong .env nếu có)."""
         action = data.get("action", "")
         if action != CommandAction.CLEAR_SETUP.value: return
 
         def do_clear():
             if self.cabinet_state:
-                self.cabinet_state.clear()
-                if self.heartbeat: self.heartbeat.stop()
+                self.cabinet_state.clear()   # listener tự subscribe lại + bật/tắt heartbeat
                 logger.info("System state cleared")
+                if self.discovery:
+                    self.discovery.discover_and_report()
 
         threading.Thread(target=do_clear, daemon=True).start()
 
     # ═══════════════════════════════════════════════════════════
-    #  OPEN COMMAND (BE → RPi)
+    #  OPEN / CLOSE / SYNC (BE → RPi)
     # ═══════════════════════════════════════════════════════════
 
-    def _handle_open_command(self, topic: str, data: dict):
-        """
-        Topic: cabinet/{cabinetName}/command/open
-        """
-        # Extract cabinet name từ topic
-        parts = topic.split("/")
-        if len(parts) < 2: return
-        cabinet_name = parts[1]
+    def _resolve_slot(self, cab: dict, data: dict):
+        """(slotIndex, boxId) của lệnh: slotIndex nếu backend gửi, không thì tra boxId trong sơ đồ."""
+        box_id = data.get("boxId", data.get("box_id"))
+        slot_index = data.get("slotIndex")
+        if slot_index is not None:
+            try:
+                slot_index = int(slot_index)
+            except (TypeError, ValueError):
+                slot_index = None
+        if slot_index is None and box_id is not None:
+            slot_index = self.cabinet_state.slot_for_box(cab["id"], box_id)
+        if slot_index is not None and box_id is not None:
+            self.cabinet_state.remember_box(cab["id"], slot_index, box_id)
+        elif slot_index is not None:
+            box_id = self.cabinet_state.box_id_for_slot(cab["id"], slot_index)
+        return slot_index, box_id
 
-        # Tìm cabinet trong state
-        cab = self.cabinet_state.get_cabinet_by_name(cabinet_name)
-        if not cab:
-            logger.error(f"Cannot open locker – cabinet '{cabinet_name}' not configured")
-            return
+    def _publish_result(self, cab: dict, action: str, command_id, slot_index, box_id,
+                        status: str, hw_state: str, error_code: Optional[str], message: str):
+        payload = {
+            "commandId": command_id,
+            "boxId": box_id,
+            "slotIndex": slot_index,
+            "status": status,
+            "hwState": hw_state,
+            "errorCode": error_code,
+            "errorMessage": message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self.mqtt.publish(f"cabinet/{cab['id']}/command/{action}/result", json.dumps(payload), qos=1)
 
+    def _handle_open_command(self, cab: dict, data: dict):
+        """Topic: cabinet/{lockerId}/command/open"""
         cabinet_id = cab["id"]
         slave_id = cab.get("slaveId", 1)
-        locker_id = data.get("lockerId", "")
-        slot_index = data.get("slotIndex")
         command_id = data.get("commandId")
+        slot_index, box_id = self._resolve_slot(cab, data)
 
-        if slot_index is None: return
-
-        logger.warning(f"🔓 OPEN REQUEST: cabinet={cabinet_name}, slot={slot_index}, cmdId={command_id}")
-
-        # Gửi serial command
-        if self.serial:
-            # Immediately set state to OPENING (Optimistic, but will be corrected by result)
-            if self.heartbeat:
-                self.heartbeat.update_locker_state(cabinet_id, slot_index, LockerHwState.OPENING.value)
-
-            result = self.serial.open_slot(slot_index, slave_id=slave_id)
-            ok = result.get("result") == "OK"
-            door_is_closed = result.get("door", True) # door: True means closed
-
-            # Determine final state based on physical sensor
-            if ok and not door_is_closed:
-                status = "SUCCESS"
-                message = "Door opened successfully"
-                hw_state = LockerHwState.OPENING.value
-                error_code = None
-            else:
-                status = "FAILED"
-                # Nếu không mở được (vẫn closed), set state là CLOSING như user yêu cầu
-                hw_state = LockerHwState.CLOSING.value
-                if ok and door_is_closed:
-                    message = "Command OK but door remained closed (jammed?)"
-                    error_code = "JAMMED"
-                else:
-                    message = f"Hardware error: {result.get('error')}"
-                    error_code = result.get("error", "SERIAL_ERROR")
-            
-            # --- 1. Publish Result (BE waits for this) ---
-            result_topic = f"cabinet/{cabinet_name}/command/open/result"
-            res_payload = {
-                "commandId": command_id,
-                "lockerId": locker_id,
-                "slotIndex": slot_index,
-                "status": status,
-                "hwState": hw_state,
-                "errorCode": error_code,
-                "errorMessage": message,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            self.mqtt.publish(result_topic, json.dumps(res_payload), qos=1)
-
-            # --- 2. Publish legacy ACK (for compatibility) ---
-            ack_topic = f"cabinet/{cabinet_name}/locker/{locker_id}/ack"
-            ack_payload = OpenAckPayload(
-                lockerId=locker_id,
-                slotIndex=slot_index,
-                status=status,
-                message=message,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                errorCode=error_code
-            ).to_json()
-            self.mqtt.publish(ack_topic, ack_payload, qos=1)
-
-            if self.heartbeat:
-                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
-        else:
-            logger.error("Serial not available")
-
-    # ═══════════════════════════════════════════════════════════
-    #  CLOSE COMMAND (BE → RPi)
-    # ═══════════════════════════════════════════════════════════
-
-    def _handle_close_command(self, topic: str, data: dict):
-        """
-        Topic: cabinet/{cabinetName}/command/close
-        """
-        parts = topic.split("/")
-        if len(parts) < 2: return
-        cabinet_name = parts[1]
-
-        cab = self.cabinet_state.get_cabinet_by_name(cabinet_name)
-        if not cab:
-            logger.error(f"Cannot close locker – cabinet '{cabinet_name}' not configured")
+        if slot_index is None:
+            logger.error(f"OPEN {command_id}: không biết ô nào (boxId={box_id}, không có slotIndex)")
+            self._publish_result(cab, "open", command_id, None, box_id, "FAILED",
+                                 LockerHwState.UNKNOWN.value, "UNKNOWN_SLOT",
+                                 "Lệnh không có slotIndex và boxId không có trong sơ đồ ô của Pi")
+            return
+        if not self.serial:
+            self._publish_result(cab, "open", command_id, slot_index, box_id, "FAILED",
+                                 LockerHwState.UNKNOWN.value, "HW_ERROR", "Hardware not available")
             return
 
+        logger.warning(f"🔓 OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
+        result = self.serial.open_slot(slot_index, slave_id=slave_id)
+        relay_ok = result.get("result") == "OK"
+        door_closed = result.get("door", True)   # door: True = cửa đóng
+        hw_state = LockerHwState.CLOSED.value if door_closed else LockerHwState.OPEN.value
+
+        if relay_ok and (not door_closed or not settings.REQUIRE_DOOR_SENSOR):
+            status, error_code, message = "SUCCESS", None, "Door opened"
+        elif relay_ok:
+            status, error_code = "FAILED", "JAMMED"
+            message = "Relay chạy nhưng cảm biến vẫn thấy cửa đóng (kẹt cửa hoặc cảm biến chưa nối)"
+        else:
+            status = "FAILED"
+            error_code = result.get("error", "HW_ERROR")
+            message = f"Hardware error: {error_code}"
+
+        self._publish_result(cab, "open", command_id, slot_index, box_id, status, hw_state, error_code, message)
+        if self.heartbeat:
+            self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
+
+    def _handle_close_command(self, cab: dict, data: dict):
+        """Topic: cabinet/{lockerId}/command/close — dành sẵn, backend hiện chưa gửi."""
         cabinet_id = cab["id"]
         slave_id = cab.get("slaveId", 1)
-        locker_id = data.get("lockerId", "")
-        slot_index = data.get("slotIndex")
         command_id = data.get("commandId")
+        slot_index, box_id = self._resolve_slot(cab, data)
 
-        if slot_index is None: return
-
-        logger.warning(f"🔒 CLOSE REQUEST: cabinet={cabinet_name}, slot={slot_index}, cmdId={command_id}")
-
-        if self.serial:
-            result = self.serial.close_slot(slot_index, slave_id=slave_id)
-            ok = result.get("result") == "OK"
-            door_is_closed = result.get("door", True)
-
-            if ok and door_is_closed:
-                status = "SUCCESS"
-                message = "Door is closed and locked"
-                hw_state = LockerHwState.CLOSING.value
-                error_code = None
-            else:
-                status = "FAILED"
-                # Cố gắng report đúng trạng thái thực tế
-                hw_state = LockerHwState.CLOSING.value if door_is_closed else LockerHwState.OPENING.value
-                message = "Door failed to lock or is still open"
-                error_code = result.get("error", "HARDWARE_FAILURE")
-
-            # Publish Result
-            result_topic = f"cabinet/{cabinet_name}/command/close/result"
-            res_payload = {
-                "commandId": command_id,
-                "lockerId": locker_id,
-                "slotIndex": slot_index,
-                "status": status,
-                "hwState": hw_state,
-                "errorCode": error_code,
-                "errorMessage": message,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            self.mqtt.publish(result_topic, json.dumps(res_payload), qos=1)
-
-            if self.heartbeat:
-                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
-        else:
+        if slot_index is None:
+            self._publish_result(cab, "close", command_id, None, box_id, "FAILED",
+                                 LockerHwState.UNKNOWN.value, "UNKNOWN_SLOT",
+                                 "Lệnh không có slotIndex và boxId không có trong sơ đồ ô của Pi")
+            return
+        if not self.serial:
             logger.error("Serial not available")
+            return
+
+        logger.warning(f"🔒 CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, cmdId={command_id}")
+        result = self.serial.close_slot(slot_index, slave_id=slave_id)
+        ok = result.get("result") == "OK"
+        door_closed = result.get("door", True)
+        hw_state = LockerHwState.CLOSED.value if door_closed else LockerHwState.OPEN.value
+
+        if ok and door_closed:
+            status, error_code, message = "SUCCESS", None, "Door is closed and locked"
+        else:
+            status = "FAILED"
+            message = "Door failed to lock or is still open"
+            error_code = result.get("error", "HW_ERROR") if not ok else "DOOR_OPEN"
+
+        self._publish_result(cab, "close", command_id, slot_index, box_id, status, hw_state, error_code, message)
+        if self.heartbeat:
+            self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
+
+    def _handle_sync_command(self, cab: dict, data: dict):
+        """Topic: cabinet/{lockerId}/command/sync — backend báo trạng thái đặt chỗ của ô, không cần phản hồi."""
+        slot_index, box_id = self._resolve_slot(cab, data)
+        logger.info(f"SYNC: locker={cab['id']} slot={slot_index} box={box_id} state={data.get('state')}")
 
     # ═══════════════════════════════════════════════════════════
-    #  DOOR EVENT (Arduino → RPi → BE)
+    #  DOOR EVENT (cảm biến → RPi → BE)
     # ═══════════════════════════════════════════════════════════
 
     def handle_door_event(self, slot_index: int, event_type: str, slave_id: int = 1):
         """
-        Callback khi Arduino detect sensor đổi trạng thái.
+        Callback khi cảm biến cửa đổi trạng thái (GPIO hoặc Arduino).
+        Topic: cabinet/{lockerId}/locker/{slotIndex}/status
         """
-        # Tìm cabinet đang map với slave_id này
-        # (Giả định 1 slave_id map với 1 cabinet_id duy nhất)
-        cab = None
-        for c in self.cabinet_state.all_cabinets:
-            if c.get("slaveId") == slave_id:
-                cab = c
-                break
-        
+        cab = self.cabinet_state.get_cabinet_by_slave(slave_id) if self.cabinet_state else None
         if not cab:
             logger.warning(f"Event ignored – no cabinet mapped to Slave {slave_id}")
             return
 
         cabinet_id = cab["id"]
-        cabinet_name = cab["name"]
-        prefix = f"cabinet/{cabinet_name}"
+        door_open = event_type == "DOOR_OPENED"
+        hw_state = LockerHwState.OPEN.value if door_open else LockerHwState.CLOSED.value
+        box_id = self.cabinet_state.box_id_for_slot(cabinet_id, slot_index)
 
-        # [NEW] Lookup lockerId from state (chuẩn hóa topic)
-        locker_info = self.cabinet_state.get_locker_by_slot(cabinet_id, slot_index)
-        locker_id = locker_info["id"] if locker_info else f"unknown-{slot_index}"
+        logger.warning(f"🚪 {event_type}: locker={cabinet_id}, slot={slot_index}, box={box_id}")
 
-        logger.warning(f"门 {event_type}: cabinet={cabinet_name}, slot={slot_index}, lockerId={locker_id}")
-
-        # 1. Publish Status (Chuẩn: {prefix}/locker/{lockerId}/status)
-        status_topic = f"{prefix}/locker/{locker_id}/status"
-        hw_state = LockerHwState.OPENING.value if event_type == "DOOR_OPENED" else LockerHwState.CLOSING.value
-        
         status_payload = {
-            "lockerId": locker_id,
             "slotIndex": slot_index,
             "hwState": hw_state,
-            "doorSensor": True if event_type == "DOOR_OPENED" else False,
-            "lockSensor": False, # Placeholder as hardware might not report this yet
+            "doorOpen": door_open,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.mqtt.publish(status_topic, json.dumps(status_payload), qos=1)
+        if box_id is not None:
+            status_payload["boxId"] = box_id
+        self.mqtt.publish(f"cabinet/{cabinet_id}/locker/{slot_index}/status", json.dumps(status_payload), qos=1)
 
-        # 2. Publish Close Command if needed (legacy compatibility or specific logic)
-        if event_type == "DOOR_CLOSED":
-            payload = json.dumps({"cabinetId": cabinet_id, "slotIndex": slot_index})
-            self.mqtt.publish(f"{prefix}/command/close", payload, qos=1)
-            
         if self.heartbeat:
             self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
 
-    def _on_setup_complete(self, cabinet_name: str):
-        """Setup xong -> subscribe topic mở của cabinet đó."""
-        logger.info(f"Subscribing commands for new cabinet: {cabinet_name}")
-        self.mqtt.subscribe_open_command(cabinet_name)
-        if self.heartbeat: self.heartbeat.start()
+    def _on_setup_complete(self, cabinet_id: str):
+        """Setup xong -> subscribe lệnh của tủ, báo heartbeat + discovery để backend thấy ngay."""
+        logger.info(f"Setup complete for locker {cabinet_id}")
+        self.refresh_subscriptions()
+        if self.heartbeat:
+            self.heartbeat.start()
+            self.heartbeat.publish_now()
+        if self.discovery:
+            threading.Thread(target=self.discovery.discover_and_report, daemon=True).start()
+
+    def shutdown(self):
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     # ═══════════════════════════════════════════════════════════
     #  UTILITY METHODS

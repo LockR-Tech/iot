@@ -297,6 +297,17 @@ class DatabaseManager:
             logger.error(f"Failed to get locker by slot from DB: {e}")
             return None
 
+    def delete_cabinet(self, cabinet_id: str):
+        """Xoá một cabinet và sơ đồ ô của nó (Pi được gán sang tủ khác)."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lockers WHERE cabinet_id = %s", (cabinet_id,))
+                    cursor.execute("DELETE FROM cabinets WHERE id = %s", (cabinet_id,))
+                conn.commit()
+        except psycopg2.Error as e:
+            logger.error(f"Failed to delete cabinet {cabinet_id} from DB: {e}")
+
     def clear_all_state(self):
         """Xoá sạch thông tin location và các cabinet."""
         try:

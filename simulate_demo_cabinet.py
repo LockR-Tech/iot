@@ -13,9 +13,9 @@ cabinet's open command directly and replies as if a cabinet were wired up.
 
 What it talks to: `iot-service` (`LockerMqttService.sendUnlockCommandAsync`)
 publishes to `cabinet/{lockerId}/command/open` with body
-`{"commandId": "...", "box_id": <id>, "action": "OPEN", "timeout": 15}` and
-waits up to 20s for a reply on `cabinet/{lockerId}/command/open/result`.
-This script answers that reply.
+`{"commandId": "...", "boxId": <id>, "box_id": <id>, "slotIndex": <n>, "action": "OPEN", "timeout": 15}`
+and waits for a reply on `cabinet/{lockerId}/command/open/result`. This script
+answers that reply. Contract: docs/01-overview/mqtt-contract.md (ADR-0008).
 
 It also mirrors the **booking -> IoT sync** (GAP 1): whenever an order
 reserves/occupies/releases a cell, locker-service -> iot-service publishes the
@@ -25,9 +25,10 @@ That message is fire-and-forget (no reply expected); this script just logs it,
 standing in for the cabinet updating its on-screen cell map.
 
 After a successful open it also reports the box's **physical** door state (GAP 2)
-on `cabinet/{lockerId}/locker/{boxId}/status` (`{"slotIndex": <id>, "hwState":
-"OPEN"|"CLOSED"}`). iot-service persists that hardware truth separately from the
-order-driven box status, so ops can spot mismatches.
+on `cabinet/{lockerId}/locker/{slotIndex}/status` (`{"slotIndex": <n>, "boxId": <id>,
+"hwState": "OPEN"|"CLOSED", "doorOpen": bool}`). iot-service persists that hardware
+truth separately from the order-driven box status, so ops can spot mismatches.
+An older backend that sends no `slotIndex` gets the old shape (`slotIndex` = box id).
 
 Usage:
     uv run python simulate_demo_cabinet.py
@@ -37,8 +38,10 @@ Usage:
 Env (only used by this script, independent of config/settings.py so it
 defaults to the SAME broker iot-service defaults to when nothing is
 configured):
-    MQTT_BROKER_URL   e.g. tcp://broker.hivemq.com:1883 (matches iot-service's own env var)
+    MQTT_BROKER_URL   e.g. tcp://broker.hivemq.com:1883 (matches iot-service's own env var),
+                      or wss://api.locker-drone.tech/mqtt for the private broker
     MQTT_BROKER / MQTT_PORT   alternative host/port pair if you'd rather set those
+    MQTT_USERNAME / MQTT_PASSWORD   account on the private broker (never sent without TLS)
     SIM_DELAY_SECONDS  simulated door latency before replying (default 1.5)
     SIM_FORCE_FAIL     "true" to always reply FAILED, for testing the error path
     SIM_HEARTBEAT_SECONDS    how often to heartbeat known cabinets (default 30)
@@ -89,19 +92,32 @@ _known_cabinets: set[str] = set()
 _known_lock = threading.Lock()
 
 
-def _resolve_broker() -> tuple[str, int]:
+_DEFAULT_PORTS = {"tcp": 1883, "mqtt": 1883, "ssl": 8883, "mqtts": 8883, "ws": 80, "wss": 443}
+
+
+def _resolve_broker() -> dict:
     """Same default as iot-service's `mqtt.broker-url` (tcp://broker.hivemq.com:1883)
     so this script works out of the box without any local config, but still
     honours MQTT_BROKER_URL / MQTT_BROKER+MQTT_PORT if someone pointed both
-    sides at a different broker (e.g. a local Mosquitto)."""
+    sides at a different broker (a local Mosquitto, or wss://…/mqtt in production)."""
     url = os.getenv("MQTT_BROKER_URL")
     if url:
-        without_scheme = url.split("://", 1)[-1]
-        host, _, port = without_scheme.partition(":")
-        return host, int(port) if port else 1883
-    host = os.getenv("MQTT_BROKER", "broker.hivemq.com")
-    port = int(os.getenv("MQTT_PORT", "1883"))
-    return host, port
+        scheme, _, rest = url.partition("://") if "://" in url else ("tcp", "", url)
+        hostport, slash, path = rest.partition("/")
+        host, _, port = hostport.partition(":")
+        scheme = scheme.lower()
+        return {
+            "host": host,
+            "port": int(port) if port else _DEFAULT_PORTS.get(scheme, 1883),
+            "tls": scheme in ("ssl", "mqtts", "wss"),
+            "transport": "websockets" if scheme in ("ws", "wss") else "tcp",
+            "path": f"/{path}" if slash else "/mqtt",
+        }
+    return {
+        "host": os.getenv("MQTT_BROKER", "broker.hivemq.com"),
+        "port": int(os.getenv("MQTT_PORT", "1883")),
+        "tls": False, "transport": "tcp", "path": "/mqtt",
+    }
 
 
 def _publish_heartbeat(client: mqtt.Client, cabinet_id: str):
@@ -149,32 +165,35 @@ def _on_connect(client, userdata, flags, reason_code, properties=None):
         print(f"[SIM] Connect failed, reason_code={reason_code}")
 
 
-def _report_box_hw_state(client: mqtt.Client, locker_id: str, box_id, hw_state: str):
+def _report_box_hw_state(client: mqtt.Client, locker_id: str, box_id, slot_index, hw_state: str):
     """GAP 2: report a box's physical door/sensor state on the status channel
-    iot-service persists (`cabinet/{lockerId}/locker/{boxId}/status`, boxId in
-    `slotIndex`). Kept separate from the order-driven status — hardware truth only."""
+    iot-service persists (`cabinet/{lockerId}/locker/{slotIndex}/status`). Kept
+    separate from the order-driven status — hardware truth only. Without a
+    slotIndex (older backend) fall back to the old shape: box id in `slotIndex`."""
     if not client.is_connected():
         return
-    topic = f"cabinet/{locker_id}/locker/{box_id}/status"
-    payload = {
-        "slotIndex": box_id,
-        "hwState": hw_state,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    if slot_index is None:
+        topic = f"cabinet/{locker_id}/locker/{box_id}/status"
+        payload = {"slotIndex": box_id, "hwState": hw_state}
+    else:
+        topic = f"cabinet/{locker_id}/locker/{slot_index}/status"
+        payload = {"slotIndex": slot_index, "boxId": box_id, "hwState": hw_state,
+                   "doorOpen": hw_state == "OPEN"}
+    payload["timestamp"] = datetime.now(timezone.utc).isoformat()
     client.publish(topic, json.dumps(payload), qos=1)
-    print(f"[SIM] HW state -> {topic}: box={box_id} {hw_state}")
+    print(f"[SIM] HW state -> {topic}: box={box_id} slot={slot_index} {hw_state}")
 
 
-def _reply_after_delay(client: mqtt.Client, locker_id: str, command_id, box_id):
+def _reply_after_delay(client: mqtt.Client, locker_id: str, command_id, box_id, slot_index):
     time.sleep(SIM_DELAY_SECONDS)
     failed = SIM_FORCE_FAIL
     status = "FAILED" if failed else "SUCCESS"
     payload = {
         "commandId": command_id,
-        "lockerId": locker_id,
         "boxId": box_id,
+        "slotIndex": slot_index,
         "status": status,
-        "hwState": "CLOSING" if failed else "OPENING",
+        "hwState": "CLOSED" if failed else "OPEN",
         "errorCode": "SIMULATED_FAILURE" if failed else None,
         "errorMessage": "Simulated hardware failure" if failed else "Simulated: door opened",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -187,11 +206,11 @@ def _reply_after_delay(client: mqtt.Client, locker_id: str, command_id, box_id):
     # On a successful open, report the door physically OPEN now and CLOSED shortly
     # after — gives iot-service real hardware telemetry to persist (GAP 2).
     if not failed and box_id is not None:
-        _report_box_hw_state(client, locker_id, box_id, "OPEN")
+        _report_box_hw_state(client, locker_id, box_id, slot_index, "OPEN")
         threading.Timer(
             SIM_DOOR_CLOSE_SECONDS,
             _report_box_hw_state,
-            args=(client, locker_id, box_id, "CLOSED"),
+            args=(client, locker_id, box_id, slot_index, "CLOSED"),
         ).start()
 
 
@@ -214,26 +233,29 @@ def _on_message(client, userdata, msg):
         state = data.get("state")
         order_id = data.get("orderId")
         order_part = f" order={order_id}" if order_id is not None else ""
-        print(f"[SIM] SYNC: cabinet display updated -> locker={locker_id} box={box_id} state={state}{order_part}")
+        print(f"[SIM] SYNC: cabinet display updated -> locker={locker_id} box={box_id} "
+              f"slot={data.get('slotIndex')} state={state}{order_part}")
         return
 
     command_id = data.get("commandId")
-    box_id = data.get("box_id", data.get("boxId"))
-    print(f"[SIM] OPEN request: locker={locker_id} box={box_id} commandId={command_id}")
+    box_id = data.get("boxId", data.get("box_id"))
+    slot_index = data.get("slotIndex")
+    print(f"[SIM] OPEN request: locker={locker_id} box={box_id} slot={slot_index} commandId={command_id}")
     threading.Thread(
         target=_reply_after_delay,
-        args=(client, locker_id, command_id, box_id),
+        args=(client, locker_id, command_id, box_id, slot_index),
         daemon=True,
     ).start()
 
 
 def main():
-    host, port = _resolve_broker()
+    broker = _resolve_broker()
+    host, port = broker["host"], broker["port"]
     with _known_lock:
         _known_cabinets.update(SIM_HEARTBEAT_CABINETS)
     print("=" * 60)
     print("  Demo cabinet simulator (no hardware required)")
-    print(f"  Broker: {host}:{port}")
+    print(f"  Broker: {host}:{port} ({broker['transport']}{', TLS' if broker['tls'] else ''})")
     print(f"  Reply delay: {SIM_DELAY_SECONDS}s, force fail: {SIM_FORCE_FAIL}")
     print(f"  Heartbeat: every {SIM_HEARTBEAT_SECONDS}s for known cabinets")
     if SIM_HEARTBEAT_CABINETS:
@@ -244,7 +266,16 @@ def main():
     print("  Raspberry Pi/Arduino hardware + the setup handshake are ready.")
     print("=" * 60)
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport=broker["transport"])
+    if broker["transport"] == "websockets":
+        client.ws_set_options(path=broker["path"])
+    if broker["tls"]:
+        client.tls_set()
+    username = os.getenv("MQTT_USERNAME")
+    if username:
+        if not broker["tls"]:
+            raise SystemExit("MQTT_USERNAME set but broker URL has no TLS (use mqtts:// or wss://)")
+        client.username_pw_set(username, os.getenv("MQTT_PASSWORD", ""))
     client.on_connect = _on_connect
     client.on_message = _on_message
     client.connect(host, port, keepalive=60)

@@ -43,7 +43,7 @@ def main():
     logger.info("=" * 60)
 
 
-    logger.info(f"   MQTT Broker : {settings.MQTT_BROKER}:{settings.MQTT_PORT_SSL}")
+    logger.info(f"   MQTT Broker : {settings.MQTT_BROKER}:{settings.MQTT_PORT_SSL if settings.MQTT_USE_TLS else settings.MQTT_PORT} ({settings.MQTT_TRANSPORT})")
     logger.info(f"   Serial Port : {settings.SERIAL_PORT}")
 
     # 2. Khởi tạo tầng Hardware (GPIO simulation)
@@ -81,15 +81,18 @@ def main():
         logger.info("[4.1/7] MQTT settings overridden from Database")
 
     # 5. Khởi tạo Cabinet State
-    cabinet_state = CabinetState(db_manager=db_manager)
+    # Tủ dự phòng từ LOCKER_ID (.env) khi Pi chưa được admin gán vào tủ nào (ADR-0008)
+    cabinet_state = CabinetState(db_manager=db_manager,
+                                 fallback_locker_id=settings.LOCKER_ID,
+                                 fallback_slave_id=settings.GPIO_SLAVE_ID)
     if cabinet_state.is_configured:
-        loc = cabinet_state.location
         cabs = cabinet_state.all_cabinets
-        logger.info(f"[5/7] Cabinet state loaded: Location={loc.get('name')}, Cabinets={len(cabs)}")
+        source = "admin" if cabinet_state.provisioned_cabinets else "LOCKER_ID trong .env"
+        logger.info(f"[5/7] Serving {len(cabs)} locker(s) ({source})")
         for i, c in enumerate(cabs):
-            logger.info(f"   {i+1}. {c['name']} (slaveId={c['slaveId']})")
+            logger.info(f"   {i+1}. lockerId={c['id']} {c['name']} (slaveId={c.get('slaveId', 1)})")
     else:
-        logger.info("[5/7] System state: NOT CONFIGURED")
+        logger.info("[5/7] System state: NOT CONFIGURED — chờ admin gán Pi vào tủ (hoặc đặt LOCKER_ID)")
 
     # 4.2 Chạy Config API server (Local)
     from infracstructure.config_api import start_config_api
@@ -104,10 +107,11 @@ def main():
         mqtt_client=mqtt_wrapper,
         cabinet_state=cabinet_state,
         interval=cabinet_state.heartbeat_interval if cabinet_state.is_configured else 60,
+        hardware=serial_manager,
     )
 
     # 8. Khởi tạo Discovery Service
-    discovery_service = DiscoveryService(mqtt_wrapper, serial_manager)
+    discovery_service = DiscoveryService(mqtt_wrapper, serial_manager, cabinet_state=cabinet_state)
     logger.info("[6/7] Components initialized (Heartbeat, MQTT Client, Discovery)")
 
     # 7. Khởi tạo Locker Service
@@ -125,21 +129,20 @@ def main():
     serial_manager.on_door_event = locker_service.handle_door_event
     serial_manager.on_reconnect = discovery_service.discover_and_report
     mqtt_wrapper.callback = locker_service.handle_incoming_message
+    # Mỗi lần (kết nối lại) broker: báo discovery + heartbeat ngay để backend biết Pi đang online
+    # và phục vụ tủ nào (heartbeat QoS 0 gửi lúc chưa kết nối thì mất, chờ tới 60 s).
+    def _on_mqtt_connected():
+        discovery_service.discover_and_report()
+        heartbeat_service.publish_now()
+    mqtt_wrapper.on_connected = _on_mqtt_connected
 
     # Start services at INFO level
     logger.info("System initializing...")
 
-    # 8. Kết nối MQTT & start
+    # 8. Kết nối MQTT & start — topic lệnh được nhớ và subscribe lại sau mỗi lần kết nối
+    locker_service.refresh_subscriptions()
     mqtt_wrapper.start()
-    time.sleep(1)
-
-    # Thực hiện discovery ngay khi start để báo cáo cho BE
-    discovery_service.discover_and_report()
-
-    if cabinet_state.is_configured:
-        for cab in cabinet_state.all_cabinets:
-            mqtt_wrapper.subscribe_locker_commands(cab["name"])
-        heartbeat_service.start()
+    heartbeat_service.start()
     
     logger.warning("✅ System is READY (Logged at WARNING level)")
 
@@ -152,6 +155,7 @@ def main():
     finally:
         logger.info("Shutting down...")
         heartbeat_service.stop()
+        locker_service.shutdown()
         if lid_controller:
             lid_controller.shutdown()
         serial_manager.close()

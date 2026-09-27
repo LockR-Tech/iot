@@ -27,7 +27,14 @@ def _get_mac_address() -> str:
 
 class Settings:
     # ─── RPi Identity (chỉ MAC address) ───
-    MAC_ADDRESS = os.getenv("MAC_ADDRESS") or _get_mac_address()
+    MAC_ADDRESS = (os.getenv("MAC_ADDRESS") or _get_mac_address()).strip().upper()
+
+    # ─── Tủ Pi phục vụ (ADR-0008, docs/01-overview/mqtt-contract.md) ───
+    # id số của tủ trên admin. Chỉ là dự phòng: khi admin gán Pi vào tủ trên web,
+    # lệnh setup ghi đè giá trị này (lưu ở config/cabinet_state.json).
+    LOCKER_ID = os.getenv("LOCKER_ID", "").strip()
+    # Mở/thử ô chỉ báo SUCCESS khi cảm biến thấy cửa mở. Đặt false khi chưa nối cảm biến.
+    REQUIRE_DOOR_SENSOR = _env_bool("REQUIRE_DOOR_SENSOR", True)
 
     # ─── MQTT connection ───
     MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
@@ -38,6 +45,12 @@ class Settings:
     MQTT_KEEPALIVE = int(os.getenv("MQTT_KEEPALIVE", 60))
     MQTT_RECONNECT_INTERVAL = int(os.getenv("MQTT_RECONNECT_INTERVAL", 5))
     MQTT_USE_TLS = os.getenv("MQTT_USE_TLS", "true").lower() == "true"
+    # tcp: MQTT thường (cổng MQTT_PORT_SSL khi TLS, MQTT_PORT khi không).
+    # websockets: qua Nginx của backend, ví dụ wss://api.locker-drone.tech:443/mqtt.
+    MQTT_TRANSPORT = os.getenv("MQTT_TRANSPORT", "tcp").strip().lower()
+    MQTT_WS_PATH = os.getenv("MQTT_WS_PATH", "/mqtt")
+    # Kho CA riêng (PEM) nếu broker dùng chứng chỉ tự ký; trống = kho CA của hệ điều hành.
+    MQTT_CA_CERTS = os.getenv("MQTT_CA_CERTS", "").strip()
 
     # ─── Phần cứng điều khiển khoá ───
     # rs485: Pi ⇄ USB-RS485 ⇄ Arduino (locker_controller.ino) · gpio: relay + cảm biến
