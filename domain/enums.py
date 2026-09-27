@@ -2,9 +2,11 @@ from enum import Enum
 
 
 class LockerHwState(Enum):
-    OPENING = "OPENING"
-    CLOSING = "CLOSING"
+    """Trạng thái cửa gửi lên backend — locker-service dò "cửa quên đóng" bằng OPEN."""
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
     OFFLINE = "OFFLINE"
+    UNKNOWN = "UNKNOWN"
 
 
 class CommandAction(Enum):

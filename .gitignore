@@ -10,3 +10,5 @@ wheels/
 .venv
 .env
 *.env
+# Trạng thái riêng từng Pi: tủ được admin gán + sơ đồ ô (lệnh setup, ADR-0008)
+config/cabinet_state.json

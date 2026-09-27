@@ -8,8 +8,9 @@ class HeartbeatPayload:
     cabinetId: str
     timestamp: str
     status: str           # "online"
-    lockers: list         # [{"slotIndex": 0, "hwState": "CLOSING"}, ...]
+    lockers: list         # [{"slotIndex": 0, "boxId": 12, "hwState": "CLOSED"}, ...]
     macAddress: Optional[str] = None
+    firmwareVersion: Optional[str] = None
     uptime: Optional[int] = None
     cpuTemp: Optional[float] = None
     memoryUsage: Optional[float] = None
@@ -128,6 +129,8 @@ class SetupProgressPayload:
     hwDetail: dict
     progress: dict
     timestamp: str
+    lockerId: Optional[int] = None
+    boxId: Optional[int] = None
 
     def to_json(self):
         return json.dumps(asdict(self))
@@ -144,6 +147,7 @@ class LockerResultDetail:
     responseTimeMs: Optional[int] = None
     errorCode: Optional[str] = None
     errorMessage: Optional[str] = None
+    boxId: Optional[int] = None
 
 
 @dataclass
@@ -164,6 +168,8 @@ class SetupResultPayload:
     summary: dict
     lockers: list
     timestamp: str
+    lockerId: Optional[int] = None
+    errorMessage: Optional[str] = None
 
     def to_json(self):
         return json.dumps(asdict(self))

@@ -15,7 +15,7 @@ class HardwareController:
 
     def init_locker(self, locker_id):
         self._states[locker_id] = {
-            "hwState": LockerHwState.CLOSING.value,
+            "hwState": LockerHwState.CLOSED.value,
             "doorSensor": False, # False = Đóng
             "lockSensor": True   # True = Đang khóa
         }
@@ -28,7 +28,7 @@ class HardwareController:
         logger.info(f"[GPIO] Unlocking locker {locker_id}...")
         
         # Cập nhật trạng thái thành công
-        self._states[locker_id]["hwState"] = LockerHwState.OPENING.value
+        self._states[locker_id]["hwState"] = LockerHwState.OPEN.value
         self._states[locker_id]["doorSensor"] = True
         self._states[locker_id]["lockSensor"] = False
         
