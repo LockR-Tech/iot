@@ -50,15 +50,24 @@ def main():
     hw_controller = HardwareController()
     logger.info("[2/7] Hardware controller initialized")
 
-    # 3. Khởi tạo Serial Manager (Arduino communication)
-    # SIMULATION=true cho phép chạy trên PC không có Arduino (mặc định false)
+    # 3. Khởi tạo phần cứng điều khiển khoá
+    # SIMULATION=true cho phép chạy trên PC không có phần cứng (mặc định false).
+    # HARDWARE_BACKEND=gpio: relay + cảm biến nối thẳng GPIO của Pi; mặc định rs485 (Arduino).
+    # Hai loại có cùng giao diện nên các service bên dưới không phân biệt.
     import os
-    serial_manager = SerialManager(
-        port=settings.SERIAL_PORT,
-        baud_rate=settings.SERIAL_BAUD_RATE,
-        simulation=os.getenv("SIMULATION", "false").lower() == "true"
-    )
-    logger.info("[3/7] Serial manager initialized")
+    simulation = os.getenv("SIMULATION", "false").lower() == "true"
+    lid_controller = None
+    if settings.HARDWARE_BACKEND == "gpio" and not simulation:
+        from hardware.factory import create_gpio_hardware
+        serial_manager, lid_controller = create_gpio_hardware(settings)
+        logger.info(f"[3/7] GPIO hardware initialized (lid: {'on' if lid_controller else 'off'})")
+    else:
+        serial_manager = SerialManager(
+            port=settings.SERIAL_PORT,
+            baud_rate=settings.SERIAL_BAUD_RATE,
+            simulation=simulation
+        )
+        logger.info("[3/7] Serial manager initialized")
 
     # 4. Khởi tạo Database Manager
     db_manager = DatabaseManager(settings.DATABASE_PATH)
@@ -84,7 +93,8 @@ def main():
 
     # 4.2 Chạy Config API server (Local)
     from infracstructure.config_api import start_config_api
-    start_config_api(db_manager, cabinet_state, port=8000)
+    start_config_api(db_manager, cabinet_state, port=8000,
+                     hardware=serial_manager, lid=lid_controller)
     logger.info("[4.2/7] Local Config API started on port 8000")
 
     # 6. Khởi tạo MQTT Client & Heartbeat (chưa connect)
@@ -142,6 +152,8 @@ def main():
     finally:
         logger.info("Shutting down...")
         heartbeat_service.stop()
+        if lid_controller:
+            lid_controller.shutdown()
         serial_manager.close()
         mqtt_wrapper.stop()
         logger.info("Goodbye!")

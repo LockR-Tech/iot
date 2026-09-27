@@ -11,4 +11,5 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn>=0.27.0",
     "psycopg2-binary>=2.9.9",
+    "gpiod>=2.2; sys_platform == 'linux'",  # GPIO trực tiếp (HARDWARE_BACKEND=gpio)
 ]
