@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -21,7 +21,7 @@ class MQTTConfigUpdate(BaseModel):
     password: Optional[str] = None
     useTls: bool = True
 
-def create_config_app(db_manager, cabinet_state):
+def create_config_app(db_manager, cabinet_state, hardware=None, lid=None):
     app = FastAPI(title="AISL IoT Config API")
     
     # Add CORS middleware
@@ -148,6 +148,39 @@ def create_config_app(db_manager, cabinet_state):
             "hardwareSimulated": True
         }
 
+    # ─── Phần cứng: trạng thái cửa + nắp trượt ───
+    # API này nghe 0.0.0.0 và không xác thực, nên lệnh chạy động cơ chỉ nhận từ
+    # chính Pi (127.0.0.1) — từ laptop thì đi qua tunnel `ssh -L 8000:127.0.0.1:8000`.
+    def _require_local(request: Request):
+        host = request.client.host if request.client else ""
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            raise HTTPException(status_code=403, detail="Chỉ gọi được từ chính Pi (dùng SSH tunnel).")
+
+    @app.get("/hardware/status")
+    async def get_hardware_status():
+        doors = None
+        if hardware is not None and hasattr(hardware, "door_states"):
+            doors = [{"slot": i, "closed": closed} for i, closed in enumerate(hardware.door_states())]
+        return {
+            "backend": type(hardware).__name__ if hardware is not None else None,
+            "connected": hardware.is_connected() if hardware is not None else False,
+            "doors": doors,
+            "lid": lid.status() if lid is not None else None,
+        }
+
+    @app.post("/hardware/lid/{action}")
+    def control_lid(action: str, request: Request):
+        # `def` thường (không async): FastAPI chạy trong threadpool, nên lệnh `stop`
+        # vẫn vào được trong lúc `open`/`close` đang chạy động cơ.
+        _require_local(request)
+        if lid is None:
+            raise HTTPException(status_code=404, detail="Nắp trượt chưa bật (LID_ENABLED=true, HARDWARE_BACKEND=gpio).")
+        actions = {"open": lid.open, "close": lid.close, "home": lid.home, "stop": lid.stop}
+        if action not in actions:
+            raise HTTPException(status_code=400, detail=f"action phải là một trong {sorted(actions)}")
+        logger.warning(f"Lid {action} requested via local API")
+        return actions[action]()
+
     # ─── Static UI Dashboard ───
     _ui_dir = Path(__file__).parent.parent / "ui" / "dist"
     if _ui_dir.exists():
@@ -158,8 +191,8 @@ def create_config_app(db_manager, cabinet_state):
 
     return app
 
-def start_config_api(db_manager, cabinet_state, port: int = 8000):
-    app = create_config_app(db_manager, cabinet_state)
+def start_config_api(db_manager, cabinet_state, port: int = 8000, hardware=None, lid=None):
+    app = create_config_app(db_manager, cabinet_state, hardware=hardware, lid=lid)
     
     def run():
         logger.info(f"Starting Local Config API on port {port}")
