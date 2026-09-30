@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Monitor } from 'lucide-react';
 import KioskScreen from './screens/KioskScreen';
+import VirtualKeyboard from './components/VirtualKeyboard';
 
 export default function App() {
   const [time, setTime] = useState(new Date());
@@ -36,6 +37,8 @@ export default function App() {
           <KioskScreen />
         </div>
       </div>
+
+      <VirtualKeyboard />
     </div>
   );
 }
