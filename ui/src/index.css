@@ -211,10 +211,12 @@ html, body, #root {
 .home-right {
   flex: 7;
   display: flex; flex-direction: column;
-  justify-content: center; align-items: center;
-  padding: 40px 60px;
-  gap: 20px;
+  /* safe: nội dung dài hơn khung thì dồn lên đầu, không bị cắt mất phần trên */
+  justify-content: safe center; align-items: center;
+  padding: 20px 48px;
+  gap: 14px;
 }
+.home-right .locker-info-card { margin-bottom: 0; }
 .home-config {
   display: flex; align-items: center; gap: 10px;
   background: var(--bg-card);
@@ -222,7 +224,6 @@ html, body, #root {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-  margin-bottom: 20px;
   width: 100%; max-width: 420px;
 }
 .locker-select {
@@ -266,7 +267,7 @@ html, body, #root {
 .stat-available { color: var(--success); font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 4px; background: rgba(52,211,153,0.15); padding: 4px 10px; border-radius: 12px; }
 .stat-total { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; }
 
-.home-status { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; color: var(--success); font-weight: 600; margin-bottom: 24px; background: rgba(52,211,153,0.1); padding: 8px 16px; border-radius: 20px; width: fit-content; margin-left: auto; margin-right: auto; }
+.home-status { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; color: var(--success); font-weight: 600; background: rgba(52,211,153,0.1); padding: 8px 16px; border-radius: 20px; width: fit-content; margin-left: auto; margin-right: auto; }
 .footer { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: auto; padding-top: 20px; }
 
 .home-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 380px; }
@@ -392,6 +393,46 @@ html, body, #root {
 .key:active  { transform: scale(0.92); background: var(--accent); color: white; box-shadow: 0 0 20px rgba(59,130,246,0.3); border-color: var(--accent); }
 .key.fn { font-size: 14px; font-weight: 600; color: var(--text-secondary); background: transparent; box-shadow: none; border-color: transparent; }
 .key.fn:hover { color: var(--text-primary); background: rgba(0,0,0,0.05); }
+
+/* ─── Bàn phím ảo (components/VirtualKeyboard.jsx) ──────── */
+.osk {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 300;
+  padding: 10px 12px;
+  background: rgba(241,245,249,0.97);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px rgba(15,23,42,0.12);
+  touch-action: none;
+  animation: oskIn 0.18s ease-out;
+}
+@keyframes oskIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.osk-key {
+  flex: 1; height: 44px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg-card); color: var(--text-primary);
+  font-family: inherit; font-size: 19px; font-weight: 600;
+  box-shadow: 0 2px 0 #cbd5e1; cursor: pointer;
+}
+.osk-key:active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: none; transform: translateY(1px); }
+.osk-key.fn { background: #e2e8f0; color: var(--text-secondary); font-size: 15px; }
+.osk-key.fn.on { background: var(--accent-dim); border-color: var(--border-focus); color: var(--accent); }
+.osk-key.enter { background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%); border: none; box-shadow: 0 2px 0 #1e40af; color: #fff; font-size: 16px; }
+.osk-text { display: flex; flex-direction: column; gap: 6px; }
+.osk-row { display: flex; gap: 6px; }
+.osk-row > span { flex: 1; display: flex; }
+.osk-row > span.w2 { flex: 2; }
+.osk-row > span.w3 { flex: 3; }
+.osk-row > span.w7 { flex: 7; }
+.osk-numeric { display: flex; justify-content: center; gap: 8px; }
+.osk-numpad { display: grid; grid-template-columns: repeat(3, 110px); gap: 8px; }
+.osk-numpad > span { display: flex; }
+.osk-numeric .osk-key { height: 52px; font-size: 24px; }
+.osk-numeric .osk-key.fn { font-size: 15px; }
+.osk-side { display: flex; flex-direction: column; gap: 8px; width: 130px; }
+.osk-side .osk-key { height: auto; }
+.osk-side .osk-key.tall { flex: 3; }
+/* Chừa chỗ dưới cùng để cuộn được ô nhập lên trên bàn phím. */
+.osk-open .screen { padding-bottom: 290px; }
 
 /* ─── Box Grid ──────────────────────────────────────────── */
 .box-grid {
