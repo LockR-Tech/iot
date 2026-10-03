@@ -540,6 +540,29 @@ function RegisterScreen({ go, goHome, tempToken, setJwt, setUserName }) {
 // ============================================
 // BOX SELECTION
 // ============================================
+// Vị trí từng ô theo bố cục thật của tủ (rowIndex/colIndex từ /layout), giống app mobile: ô XL cao 2 hàng.
+// Thiếu toạ độ hoặc hai ô trùng chỗ thì trả null, lưới tự xếp nối tiếp như cũ.
+function boxPlacement(boxes) {
+  if (!boxes.length || boxes.some(b => !Number.isInteger(b.rowIndex) || !Number.isInteger(b.colIndex))) return null;
+  const minRow = Math.min(...boxes.map(b => b.rowIndex));
+  const minCol = Math.min(...boxes.map(b => b.colIndex));
+  const taken = new Set();
+  const place = new Map();
+  let cols = 0;
+  for (const b of boxes) {
+    const row = b.rowIndex - minRow + 1;
+    const col = b.colIndex - minCol + 1;
+    const span = b.cellType === 'XL' ? 2 : 1;
+    for (let r = row; r < row + span; r++) {
+      if (taken.has(`${r}:${col}`)) return null;
+      taken.add(`${r}:${col}`);
+    }
+    place.set(b.boxId, { gridColumn: col, gridRow: `${row} / span ${span}` });
+    cols = Math.max(cols, col);
+  }
+  return { cols, place };
+}
+
 function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelectedBox, lockerInfo, activeLockerId }) {
   const [boxes, setBoxes] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
@@ -574,7 +597,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
         if (layoutRes.success && Array.isArray(layoutRes.data?.cells)) {
           mergedBoxes = mergedBoxes.map(b => {
              const cell = layoutRes.data.cells.find(c => c.boxNumber === b.boxNumber);
-             return { ...b, cellType: cell?.cellType };
+             return { ...b, cellType: cell?.cellType, rowIndex: cell?.rowIndex, colIndex: cell?.colIndex };
           });
         }
         setBoxes(mergedBoxes);
@@ -676,10 +699,12 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
       })) || []);
 
   // Tính số ô trống hiện tại để hiển thị
-  const availableCount = boxes.filter(b => b.status === 'AVAILABLE').length;
+  // Ô DRONE chỉ nhận hàng drone thả (backend: DRONE_CELL_RESTRICTED) nên không tính là ô trống để thuê.
+  const availableCount = boxes.filter(b => b.status === 'AVAILABLE' && b.cellType !== 'DRONE').length;
+  const layout = boxPlacement(displayBoxes);
 
   return (
-    <div className="screen">
+    <div className={`screen ${layout ? 'screen-boxes' : ''}`}>
       <Header onBack={goHome} title="Chọn ô tủ" />
       {userName && <div className="user-info"><User size={16} /> {userName}</div>}
       {lockerInfo && (
@@ -709,7 +734,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
       {loading && <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 24 }}><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite', verticalAlign: -4, marginRight: 8 }} />Đang tải...</p>}
       {msg && !loading && <Msg type="error" text={msg} />}
 
-      <div className="box-grid">
+      <div className={`box-grid ${layout ? 'by-layout' : ''}`} style={layout ? { '--cols': layout.cols } : undefined}>
         {displayBoxes.map(box => {
           const myOrder = myOrders.find(o =>
             isActiveManageableOrder(o)
@@ -718,11 +743,15 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
           
           let statusText = 'Trống';
           let boxClass = 'available';
-          const isAvail = box.status === 'AVAILABLE';
+          const isDrone = box.cellType === 'DRONE' || box.type === 'DRONE';
+          const isAvail = box.status === 'AVAILABLE' && !isDrone;
           
           if (myOrder) {
             statusText = 'Ô của bạn';
             boxClass = 'yours';
+          } else if (isDrone) {
+            statusText = 'Drone';
+            boxClass = 'drone';
           } else {
             const isRented = box.status === 'RENTED' || box.status === 'OCCUPIED' || box.status === 'STORING';
             const isBooked = box.status === 'BOOKED' || box.status === 'RESERVED';
@@ -734,13 +763,14 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
           }
 
           const sel = selectedBox?.boxId === box.boxId;
-          const BoxIcon = box.cellType === 'DRONE' || box.type === 'DRONE' ? Plane : 
-                          box.cellType === 'LUGGAGE' || box.type === 'LUGGAGE' ? Luggage : Package;
+          const BoxIcon = isDrone ? Plane : 
+                          ['LUGGAGE', 'XL'].includes(box.cellType) || box.type === 'LUGGAGE' ? Luggage : Package;
 
           return (
             <button key={box.boxId} 
               onClick={() => handleBoxClick(box, isAvail, myOrder)}
               disabled={!isAvail && !myOrder}
+              style={layout?.place.get(box.boxId)}
               className={`box-item ${boxClass} ${sel ? 'selected' : ''}`}>
               <div className="box-icon"><BoxIcon size={28} /></div>
               <div className="box-number">Ô {box.boxNumber}</div>
