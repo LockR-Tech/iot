@@ -469,6 +469,29 @@ html, body, #root {
 .box-item.rented .box-icon { color: #f59e0b; }
 .box-item.booked .box-icon { color: #8b5cf6; }
 .box-item.offline .box-icon { color: #ef4444; }
+.box-item.drone { border-color: rgba(99,102,241,0.45); background: linear-gradient(135deg, rgba(129,140,248,0.16) 0%, rgba(79,70,229,0.16) 100%); color: #4f46e5; cursor: not-allowed; }
+.box-item.drone .box-icon { color: #6366f1; }
+.box-item.drone .box-status { background: rgba(99,102,241,0.15); color: #4f46e5; }
+
+/* Lưới theo bố cục thật của tủ (KioskScreen boxPlacement): số cột theo tủ, ô XL cao 2 hàng. */
+.box-grid.by-layout {
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); grid-auto-rows: 104px;
+  gap: 12px; width: 100%; max-width: calc(var(--cols) * 210px);
+  flex: none; overflow: visible; max-height: none;
+}
+.box-grid.by-layout .box-item { padding: 8px; gap: 4px; justify-content: center; }
+/* Màn chọn ô khi có bố cục: thông tin tủ + nút ở cột trái, sơ đồ tủ ở cột phải — thấy trọn tủ trên màn 600 px. */
+.screen.screen-boxes {
+  display: grid; grid-template-columns: 300px minmax(0, 1fr); column-gap: 28px;
+  /* hàng cuối 1fr nhận hết phần cao của sơ đồ tủ, các hàng cột trái giữ sát nhau */
+  grid-template-rows: auto repeat(6, min-content) 1fr;
+}
+.screen-boxes > * { grid-column: 1; }
+.screen-boxes > .header { grid-column: 1 / -1; }
+.screen-boxes > .box-grid { grid-column: 2; grid-row: 2 / -1; margin: 0 auto; align-self: start; }
+.screen-boxes > .user-info { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; color: var(--text-secondary); font-weight: 600; }
+.screen-boxes > .locker-info-card { margin-bottom: 0; }
+.screen-boxes > .btn { margin-top: 16px; }
 /* ─── Service Cards ─────────────────────────────────────── */
 .svc-list { display: flex; flex-direction: column; gap: 12px; flex: 1; overflow-y: auto; max-height: 320px; padding: 4px; }
 .svc-card {
