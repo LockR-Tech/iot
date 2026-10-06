@@ -17,12 +17,7 @@ import sys
 import time
 
 from config.settings import settings
-
-HEADER = {  # BCM → chân vật lý trên header 40 chân
-    2: 3, 3: 5, 4: 7, 5: 29, 6: 31, 7: 26, 8: 24, 9: 21, 10: 19, 11: 23, 12: 32, 13: 33,
-    14: 8, 15: 10, 16: 36, 17: 11, 18: 12, 19: 35, 20: 38, 21: 40, 22: 15, 23: 16,
-    24: 18, 25: 22, 26: 37, 27: 13,
-}
+from hardware.gpio_pins import HEADER_PIN as HEADER  # BCM → chân vật lý
 
 
 def _pin(bcm: int) -> str:
@@ -86,7 +81,8 @@ def cmd_lid(action: str):
         home_pin=settings.LID_HOME_PIN, end_pin=settings.LID_END_PIN,
         step_active_low=settings.LID_STEP_ACTIVE_LOW, limit_active_low=settings.LID_LIMIT_ACTIVE_LOW,
         open_dir_high=settings.LID_OPEN_DIR_HIGH, steps_per_sec=settings.LID_STEPS_PER_SEC,
-        max_steps=settings.LID_MAX_STEPS,
+        max_steps=settings.LID_MAX_STEPS, pulse_us=settings.LID_PULSE_US,
+        steps_per_rev=settings.LID_STEPS_PER_REV,
     ).start()
     try:
         if action == "status":

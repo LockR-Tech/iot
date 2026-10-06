@@ -83,7 +83,24 @@ class Settings:
     LID_LIMIT_ACTIVE_LOW = _env_bool("LID_LIMIT_ACTIVE_LOW", True)  # công tắc thường mở về GND
     LID_OPEN_DIR_HIGH = _env_bool("LID_OPEN_DIR_HIGH", True)        # đảo nếu nắp chạy ngược
     LID_STEPS_PER_SEC = int(os.getenv("LID_STEPS_PER_SEC", 800))
+    LID_START_STEPS_PER_SEC = int(os.getenv("LID_START_STEPS_PER_SEC", 200))
+    LID_RAMP_STEPS = int(os.getenv("LID_RAMP_STEPS", 200))
     LID_MAX_STEPS = int(os.getenv("LID_MAX_STEPS", 20000))          # chặn chạy mãi khi hỏng công tắc
+    LID_STEPS_PER_REV = int(os.getenv("LID_STEPS_PER_REV", 1600))   # theo DIP của TB6600
+    # Opto TB6600 nối 3,3 V cần xung dài: 20 µs động cơ chỉ rung, 1000 µs chạy đủ vòng.
+    LID_PULSE_US = int(os.getenv("LID_PULSE_US", 1000))
+
+    # Trục thứ hai (driver TB6600 thứ hai + 2 công tắc). Tốc độ, xung, DIP dùng chung LID_*.
+    LID2_ENABLED = _env_bool("LID2_ENABLED", False)
+    LID2_PUL_PIN = int(os.getenv("LID2_PUL_PIN", 9))
+    LID2_DIR_PIN = int(os.getenv("LID2_DIR_PIN", 11))
+    LID2_HOME_PIN = int(os.getenv("LID2_HOME_PIN", 7))
+    LID2_END_PIN = int(os.getenv("LID2_END_PIN", 8))
+    LID2_OPEN_DIR_HIGH = _env_bool("LID2_OPEN_DIR_HIGH", True)
+    LID2_LIMIT_ACTIVE_LOW = _env_bool("LID2_LIMIT_ACTIVE_LOW", LID_LIMIT_ACTIVE_LOW)
+
+    # Tốc độ/xung chỉnh trên bảng điều khiển kỹ thuật, ghi đè LID_* (riêng từng Pi, không commit).
+    LID_TUNING_FILE = os.getenv("LID_TUNING_FILE", str(Path(__file__).parent / "lid_tuning.json"))
 
     # ─── Hardware ───
     TOTAL_SLOTS = int(os.getenv("TOTAL_SLOTS", 24))
