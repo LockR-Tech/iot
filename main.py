@@ -11,6 +11,7 @@ from infracstructure.database import DatabaseManager
 from services.locker_service import LockerService
 from services.heartbeat_service import HeartbeatService
 from services.discovery_service import DiscoveryService
+from services.ble_service import BleAdvertiserService
 from utils.logger import get_logger
 
 logger = get_logger("Main")
@@ -139,11 +140,15 @@ def main():
     # Start services at INFO level
     logger.info("System initializing...")
 
-    # 8. Kết nối MQTT & start — topic lệnh được nhớ và subscribe lại sau mỗi lần kết nối
+    # 8. Kết nối MQTT, Heartbeat & khởi động BLE Advertising
     locker_service.refresh_subscriptions()
     mqtt_wrapper.start()
     heartbeat_service.start()
-    
+
+    # 9. Khởi tạo & phát sóng BLE Beacon cho App Mobile nhận diện mở tủ
+    ble_service = BleAdvertiserService(cabinet_state=cabinet_state)
+    ble_service.start()
+
     logger.warning("✅ System is READY (Logged at WARNING level)")
 
     # Giữ chương trình chạy
@@ -154,6 +159,7 @@ def main():
         pass
     finally:
         logger.info("Shutting down...")
+        ble_service.stop()
         heartbeat_service.stop()
         locker_service.shutdown()
         if lid_controller:
