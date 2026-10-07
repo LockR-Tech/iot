@@ -33,6 +33,9 @@ class Settings:
     # id số của tủ trên admin. Chỉ là dự phòng: khi admin gán Pi vào tủ trên web,
     # lệnh setup ghi đè giá trị này (lưu ở config/cabinet_state.json).
     LOCKER_ID = os.getenv("LOCKER_ID", "").strip()
+    LOCKER_CODE = os.getenv("LOCKER_CODE", "CAB-TU01").strip()
+    BLE_ENABLED = _env_bool("BLE_ENABLED", True)
+    BLE_DEVICE_NAME = os.getenv("BLE_DEVICE_NAME", "").strip()
     # Mở/thử ô chỉ báo SUCCESS khi cảm biến thấy cửa mở. Đặt false khi chưa nối cảm biến.
     REQUIRE_DOOR_SENSOR = _env_bool("REQUIRE_DOOR_SENSOR", True)
 
