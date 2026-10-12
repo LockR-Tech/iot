@@ -6,7 +6,7 @@ import {
   CheckCircle, KeyRound, Hash, User, CreditCard,
   Unlock, Home, Loader2, Delete, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X, Banknote,
-  Clock, LogOut, Users, AlertTriangle, Plane, Luggage
+  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import boxStack3d from '../assets/illustrations/box_stack_3d.png';
@@ -139,7 +139,7 @@ export default function KioskScreen() {
   return (
     <div className="kiosk-wrap">
       {screen === 'home' && <HomeScreen go={go} lockerInfo={lockerInfo} activeLockerId={activeLockerId} setActiveLockerId={setActiveLockerId} allLockers={allLockers} />}
-      {screen === 'login' && <LoginScreen go={go} goHome={goHome} email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} loginMethod={loginMethod} setLoginMethod={setLoginMethod} />}
+      {screen === 'login' && <LoginScreen go={go} goHome={goHome} email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} loginMethod={loginMethod} setLoginMethod={setLoginMethod} activeLockerId={activeLockerId} setJwt={setJwt} setUserName={setUserName} />}
       {screen === 'otp' && <OtpScreen go={go} back={back} email={email} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
       {screen === 'phone-otp' && <PhoneOtpScreen go={go} back={back} phone={phone} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
       {screen === 'register' && <RegisterScreen go={go} goHome={goHome} tempToken={tempToken} setJwt={setJwt} setUserName={setUserName} />}
@@ -284,9 +284,9 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
 
 
 // ============================================
-// LOGIN (Email + Phone toggle)
+// LOGIN (Phone / Email OTP / Quét QR bằng app)
 // ============================================
-function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod, setLoginMethod }) {
+function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod, setLoginMethod, activeLockerId, setJwt, setUserName }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
   const recaptchaReady = useRef(false);
@@ -339,6 +339,13 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
     setLoading(false);
   };
 
+  // Giống đăng nhập OTP: giữ access token + tên khách rồi sang bước chọn ô.
+  const handleQrLoggedIn = (data) => {
+    setJwt(data.accessToken);
+    setUserName(data.user?.fullName || data.user?.phoneNumber || 'Khách');
+    go('boxes');
+  };
+
   return (
     <div className="screen">
       <Header onBack={goHome} title="Nhập thông tin" />
@@ -349,9 +356,14 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
         <div className={`login-tab ${loginMethod === 'email' ? 'active' : ''}`} onClick={() => { setLoginMethod('email'); setMsg(''); }}>
           <Mail size={16} /> Email
         </div>
+        <div className={`login-tab ${loginMethod === 'qr' ? 'active' : ''}`} onClick={() => { setLoginMethod('qr'); setMsg(''); }}>
+          <QrCode size={16} /> Quét QR bằng app
+        </div>
       </div>
 
-      {loginMethod === 'phone' ? (
+      {loginMethod === 'qr' ? (
+        <QrLoginPanel lockerId={activeLockerId} onLoggedIn={handleQrLoggedIn} />
+      ) : loginMethod === 'phone' ? (
         <>
           <p className="subtitle">Nhập số điện thoại để nhận mã OTP xác thực</p>
           <div className="form-group">
@@ -374,6 +386,156 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
         </>
       )}
       {msg && <Msg type="error" text={msg} />}
+    </div>
+  );
+}
+
+// ============================================
+// QR LOGIN (khách quét bằng app Lock.R)
+// ============================================
+// Kiosk tạo phiên → hiện QR (chỉ chứa mã phiên + mã xác nhận, đều công khai) → khách quét bằng app và
+// xác nhận → kiosk hỏi trạng thái bằng pollToken tới khi nhận token (server trả đúng một lần) rồi đi tiếp
+// như đăng nhập OTP. pollToken chỉ nằm trong biến của effect: không vào state, không hiện, không log.
+const QR_DEFAULT_TTL_MS = 120000;           // hợp đồng: phiên sống 120 s
+const QR_MAX_TTL_MS = 10 * 60 * 1000;
+const QR_EXPIRY_GRACE_MS = 5000;            // quá hạn mà chưa nghe server báo EXPIRED (mất mạng) thì tự dừng
+
+function QrLoginPanel({ lockerId, onLoggedIn }) {
+  const [attempt, setAttempt] = useState(0);         // "Tạo mã mới" tăng số này để tạo phiên khác
+  const [phase, setPhase] = useState('creating');    // creating | pending | ended
+  const [qr, setQr] = useState(null);                // { content, sessionId, code, deadline } — phần công khai
+  const [msg, setMsg] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+  const onLoggedInRef = useRef(onLoggedIn);
+
+  useEffect(() => { onLoggedInRef.current = onLoggedIn; }, [onLoggedIn]);
+
+  useEffect(() => {
+    let alive = true;
+    let timer = null;
+    let session = null;     // { sessionId, pollToken } của phiên đang chờ; null = không còn gì để huỷ
+
+    const end = (text) => {
+      session = null;
+      setPhase('ended');
+      setMsg(text);
+    };
+
+    // Hỏi tuần tự (xong lượt này mới hẹn lượt sau) để không có hai lượt cùng lúc tranh nhau token một lần.
+    const poll = async (pollMs, deadline) => {
+      let res = null;
+      try {
+        res = await api.pollKioskQrSession(session.sessionId, session.pollToken);
+      } catch { /* mạng chập chờn: hỏi lại lượt sau */ }
+      if (!alive || !session) return;
+      const d = res?.data;
+      const status = res?.success ? d?.status : (res?.code === 'KIOSK_QR_INVALID' ? 'INVALID' : null);
+      if (status === 'CONFIRMED' && d.accessToken) {
+        session = null;                     // đã nhận token — rời màn không huỷ phiên nữa
+        onLoggedInRef.current(d);
+        return;
+      }
+      if (status === 'EXPIRED' || status === 'INVALID') { end('Mã QR đã hết hạn.'); return; }
+      if (status === 'CANCELLED') { end('Phiên đăng nhập đã bị huỷ.'); return; }
+      if (status === 'CONSUMED' || status === 'CONFIRMED') { end('Phiên này đã được sử dụng.'); return; }
+      if (Date.now() > deadline + QR_EXPIRY_GRACE_MS) {
+        api.cancelKioskQrSession(session.sessionId, session.pollToken).catch(() => {});
+        end(res ? 'Mã QR đã hết hạn.' : 'Mất kết nối server, mã QR đã hết hạn.');
+        return;
+      }
+      timer = setTimeout(() => poll(pollMs, deadline), pollMs);
+    };
+
+    (async () => {
+      let res = null;
+      try { res = await api.createKioskQrSession(lockerId); } catch { /* báo lỗi bên dưới */ }
+      const d = res?.success ? res.data : null;
+      if (!alive) {
+        // Khách đã rời màn trong lúc chờ tạo phiên: huỷ luôn phiên vừa tạo
+        if (d?.sessionId && d?.pollToken) api.cancelKioskQrSession(d.sessionId, d.pollToken).catch(() => {});
+        return;
+      }
+      if (!d?.sessionId || !d?.pollToken || !d?.qrContent) {
+        setPhase('ended');
+        setMsg(!res ? 'Lỗi kết nối server'
+          : res.code === 'KIOSK_QR_RATE_LIMITED' ? 'Tạo mã quá nhiều lần. Vui lòng thử lại sau ít phút.'
+            : (res.message || 'Không tạo được mã QR'));
+        return;
+      }
+      // Đếm ngược theo đồng hồ kiosk; đồng hồ lệch xa (thời hạn vô lý) thì dùng thời hạn mặc định.
+      let ttl = Date.parse(d.expiresAt) - Date.now();
+      if (!Number.isFinite(ttl) || ttl <= 0 || ttl > QR_MAX_TTL_MS) ttl = QR_DEFAULT_TTL_MS;
+      const deadline = Date.now() + ttl;
+      const pollMs = Math.max(1000, Number(d.pollIntervalMs) || 2000);
+      session = { sessionId: d.sessionId, pollToken: d.pollToken };
+      setQr({ content: d.qrContent, sessionId: d.sessionId, code: d.confirmCode, deadline });
+      setNow(Date.now());
+      setPhase('pending');
+      timer = setTimeout(() => poll(pollMs, deadline), pollMs);
+    })();
+
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+      // Rời bước này (quay lại, đổi tab, về trang chủ) khi phiên còn chờ: huỷ để mã không dùng được nữa
+      if (session) api.cancelKioskQrSession(session.sessionId, session.pollToken).catch(() => {});
+    };
+  }, [lockerId, attempt]);
+
+  useEffect(() => {
+    if (phase !== 'pending') return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  const retry = () => {
+    setPhase('creating'); setMsg(''); setQr(null);
+    setAttempt(a => a + 1);
+  };
+
+  const left = qr ? Math.max(0, Math.ceil((qr.deadline - now) / 1000)) : 0;
+  const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+
+  return (
+    <div className="qr-login">
+      <div className={`qr-login-code ${phase === 'pending' && qr ? '' : 'idle'}`}>
+        {phase === 'pending' && qr ? (
+          <QRCodeSVG value={qr.content} size={200} level="M" marginSize={2} />
+        ) : phase === 'creating' ? (
+          <><Loader2 size={32} style={{ animation: 'spin 0.6s linear infinite' }} /><span>Đang tạo mã...</span></>
+        ) : (
+          <><QrCode size={48} /><span>Mã không còn hiệu lực</span></>
+        )}
+      </div>
+
+      <div className="qr-login-info">
+        <h3>Đăng nhập nhanh bằng app Lock.R</h3>
+        <ol className="qr-login-steps">
+          <li>Mở app Lock.R trên điện thoại và chọn <strong>quét mã QR</strong></li>
+          <li>Quét mã bên cạnh rồi bấm <strong>xác nhận đăng nhập kiosk</strong></li>
+          <li>Kiosk tự chuyển sang bước chọn ô tủ</li>
+        </ol>
+
+        {phase === 'pending' && qr && (
+          <>
+            <div className={`qr-login-timer ${left <= 20 ? 'warn' : ''}`}>
+              <Clock size={16} /> Mã hết hạn sau <strong>{mmss}</strong>
+            </div>
+            <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đang chờ xác nhận trên điện thoại...</p>
+            <div className="qr-login-manual">
+              Không quét được? Nhập tay trong app: mã phiên <code>{qr.sessionId}</code>
+              {qr.code && <> · mã xác nhận <code>{qr.code}</code></>}
+            </div>
+          </>
+        )}
+
+        {phase === 'ended' && (
+          <>
+            <Msg type="error" text={msg} />
+            <Btn onClick={retry}><RefreshCw size={18} /> Tạo mã mới</Btn>
+          </>
+        )}
+      </div>
     </div>
   );
 }
