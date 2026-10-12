@@ -6,7 +6,7 @@ import {
   CheckCircle, KeyRound, Hash, User, CreditCard,
   Unlock, Home, Loader2, Delete, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X, Banknote,
-  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw
+  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, Wallet
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import boxStack3d from '../assets/illustrations/box_stack_3d.png';
@@ -1158,30 +1158,57 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
 
 
 // ============================================
-// PAYMENT
+// PAYMENT (Ví LockR / Chuyển khoản VietQR qua SePay)
 // ============================================
+// Chỉ mở ô khi server báo đơn đã PAID (GET /api/orders/{id}/status → isPaid): client không bao giờ
+// tự coi là đã trả. Mã lỗi theo payment-service (PaymentService.checkout, WalletService.debit).
+const PAY_ERROR_TEXT = {
+  WALLET_INSUFFICIENT: 'Số dư Ví LockR không đủ để thanh toán đơn này. Nạp thêm trong app Lock.R hoặc chọn Chuyển khoản VietQR.',
+  PAYMENT_METHOD_DISABLED: 'Phương thức thanh toán này đang tạm tắt. Vui lòng chọn cách khác.',
+  PAYMENT_METHOD_INVALID: 'Phương thức thanh toán không hợp lệ. Vui lòng chọn cách khác.',
+  ORDER_LOOKUP_FAILED: 'Không lấy được thông tin đơn. Vui lòng thử lại.',
+};
+const payErrorText = (res, fallback) => PAY_ERROR_TEXT[res?.code] || res?.message || fallback;
+
+const SEPAY_POLL_MS = 3000;               // hỏi trạng thái đơn mỗi 3 s
+const SEPAY_WAIT_MS = 10 * 60 * 1000;     // chờ chuyển khoản tối đa 10 phút (bấm "Kiểm tra lại" để chờ tiếp)
+
 function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPrice, selectedBox, showSuccess, activeLockerId }) {
   const [loading, setLoading] = useState('');
-  const [payUrl, setPayUrl] = useState('');
-  const [qrCodeUrl, setQrCodeUrl] = useState('');
-  const [deeplink, setDeeplink] = useState('');
-  const [payMethod, setPayMethod] = useState('');
   const [msg, setMsg] = useState('');
-  const [polling, setPolling] = useState(false);
+  const [wallet, setWallet] = useState(null);              // { balance } khi đọc được số dư ví
+  const [sepay, setSepay] = useState(null);                // giao dịch VietQR đang chờ: { paymentId, referenceId, amount, qrImage, qrText, payLink }
+  const [sepayPhase, setSepayPhase] = useState('waiting'); // waiting | paid | expired | failed
+  const [sepayDeadline, setSepayDeadline] = useState(0);
+  const [qrImgFailed, setQrImgFailed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [paidConfirmed, setPaidConfirmed] = useState(false);
   const [dropOpened, setDropOpened] = useState(false);
-  const pollRef = useRef(null);
+  const aliveRef = useRef(true);
+  const openAfterPaidRef = useRef(null);
 
+  // Khách rời màn (về trang chủ) giữa chừng thì không mở ô cho người đã đi.
   useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
   }, []);
 
   const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
+
+  const loadWallet = useCallback(async () => {
+    try {
+      const res = await api.getWallet(jwt);
+      if (aliveRef.current && res.success && res.data) setWallet({ balance: Number(res.data.balance) || 0 });
+    } catch { /* không đọc được số dư thì vẫn cho bấm, server tự kiểm tra */ }
+  }, [jwt]);
+
+  useEffect(() => { loadWallet(); }, [loadWallet]);
 
   // Thanh toán được ghi nhận bất đồng bộ (qua sự kiện payment → order), nên phải đợi đơn
   // thật sự PAID rồi mới mở ô — backend từ chối mở ô bỏ hàng khi đơn chưa thanh toán.
   const waitUntilPaid = async (timeoutMs = 15000) => {
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && aliveRef.current) {
       try {
         const res = await api.getOrderStatus(orderId, jwt);
         if (res.success && res.data?.isPaid) return true;
@@ -1193,6 +1220,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
   // Mở ô để bỏ đồ; xác nhận "đã bỏ đồ" là bước riêng sau khi khách đặt đồ vào.
   const openForDrop = async () => {
+    if (!aliveRef.current) return;
     const res = await api.unlockBox(activeLockerId, orderPin, selectedBox?.boxId, 'DROP_OFF');
     if (res.success && res.data?.accepted) {
       setDropOpened(true);
@@ -1214,47 +1242,123 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     setLoading('');
   };
 
-  const payOnline = async (method) => {
-    setLoading(method);
-    setPayUrl(''); setQrCodeUrl(''); setDeeplink(''); setPayMethod(''); setMsg('');
-    try {
-      const res = await api.createPayment(jwt, orderId, method);
-      if (res.success && res.data?.paymentUrl) {
-        setPayUrl(res.data.paymentUrl);
-        setQrCodeUrl(res.data.qrCodeUrl || '');
-        setDeeplink(res.data.deeplink || '');
-        setPayMethod(method);
-        startPaymentPolling();
-      } else {
-        setMsg(res.data?.message || res.message || 'Lỗi tạo thanh toán');
-      }
-    } catch { setMsg('Lỗi kết nối'); }
-    setLoading('');
-  };
-
-  const startPaymentPolling = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    setPolling(true);
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await api.getOrderStatus(orderId, jwt);
-        if (res.success && res.data?.isPaid) {
-          clearInterval(pollRef.current);
-          setPolling(false);
-          await openAfterPay();
-        }
-      } catch { /* ignore polling errors */ }
-    }, 3000);
-  };
-
-  const openAfterPay = async () => {
+  // Server đã báo PAID: sang bước mở ô (mở lỗi thì còn nút "Mở ô tủ" để thử lại, không trả lại lần nữa).
+  const openAfterPaid = async () => {
+    if (!aliveRef.current) return;
+    setPaidConfirmed(true);
     setLoading('open'); setMsg('');
-    if (pollRef.current) { clearInterval(pollRef.current); setPolling(false); }
     try {
       await openForDrop();
     } catch { setMsg('Lỗi kết nối'); }
     setLoading('');
   };
+  openAfterPaidRef.current = openAfterPaid;
+
+  // Sau checkout (hoặc khi server báo đơn đã được trả trước đó): đợi server ghi nhận PAID rồi mới mở ô.
+  const openWhenServerPaid = async () => {
+    if (await waitUntilPaid()) {
+      await openAfterPaid();
+    } else if (aliveRef.current) {
+      setMsg('Chưa ghi nhận được thanh toán. Vui lòng thử lại sau giây lát.');
+    }
+  };
+
+  const payWallet = async () => {
+    setLoading('WALLET'); setMsg('');
+    try {
+      const res = await api.checkoutWallet(jwt, orderId);
+      // ORDER_ALREADY_PAID: lần bấm trước đã trừ ví nhưng chờ quá lâu — không trừ lại, chỉ đợi PAID.
+      if (res.success || res.code === 'ORDER_ALREADY_PAID') {
+        loadWallet();
+        await openWhenServerPaid();
+      } else {
+        setMsg(payErrorText(res, 'Không thanh toán được bằng ví. Vui lòng thử lại.'));
+        if (res.code === 'WALLET_INSUFFICIENT') loadWallet();
+      }
+    } catch { setMsg('Lỗi kết nối'); }
+    setLoading('');
+  };
+
+  const startSepay = async () => {
+    setLoading('SEPAY'); setMsg('');
+    try {
+      const res = await api.checkoutSepay(jwt, orderId);
+      if (res.success && res.data) {
+        const d = res.data;
+        // qrCodeUrl thường là link ảnh VietQR; nếu server chỉ trả chuỗi QR thì tự vẽ bằng qrcode.react.
+        const qr = typeof d.qrCodeUrl === 'string' ? d.qrCodeUrl.trim() : '';
+        const qrIsImage = /^https?:\/\//i.test(qr);
+        const next = {
+          paymentId: d.id,
+          referenceId: d.referenceId || '',
+          amount: Number(d.amount ?? totalPrice) || 0,
+          qrImage: qrIsImage ? qr : '',
+          qrText: qrIsImage ? '' : qr,
+          payLink: typeof d.paymentUrl === 'string' ? d.paymentUrl : '',
+        };
+        if (!next.qrImage && !next.qrText && !next.payLink) {
+          setMsg('Không tạo được mã VietQR. Vui lòng chọn cách thanh toán khác.');
+        } else {
+          setQrImgFailed(false);
+          setSepayPhase('waiting');
+          setSepayDeadline(Date.now() + SEPAY_WAIT_MS);
+          setNow(Date.now());
+          setSepay(next);
+        }
+      } else if (res.code === 'ORDER_ALREADY_PAID') {
+        await openWhenServerPaid();
+      } else {
+        setMsg(payErrorText(res, 'Không tạo được mã VietQR. Vui lòng thử lại.'));
+      }
+    } catch { setMsg('Lỗi kết nối'); }
+    setLoading('');
+  };
+
+  // Chỉ dừng chờ trên kiosk; giao dịch PENDING vẫn còn, tiền chuyển muộn vẫn được webhook ghi nhận.
+  const cancelSepay = () => {
+    setSepay(null); setSepayPhase('waiting'); setMsg('');
+  };
+
+  const recheckSepay = () => {
+    setMsg('');
+    setSepayDeadline(Date.now() + SEPAY_WAIT_MS);
+    setNow(Date.now());
+    setSepayPhase('waiting');
+  };
+
+  // Hỏi tuần tự (xong lượt này mới hẹn lượt sau). Đơn PAID ⇒ mở ô; giao dịch FAILED (chuyển thiếu tiền) ⇒ báo lỗi.
+  useEffect(() => {
+    if (!sepay || sepayPhase !== 'waiting') return undefined;
+    let alive = true;
+    let timer = null;
+    const tick = async () => {
+      let paid = false;
+      let failed = false;
+      try {
+        const st = await api.getOrderStatus(orderId, jwt);
+        paid = Boolean(st?.success && st.data?.isPaid);
+        if (!paid && sepay.paymentId != null) {
+          const p = await api.getPayment(jwt, sepay.paymentId);
+          failed = Boolean(p?.success) && String(p.data?.status || '').toUpperCase() === 'FAILED';
+        }
+      } catch { /* mạng chập chờn: hỏi lại lượt sau */ }
+      if (!alive) return;
+      if (paid) { setSepayPhase('paid'); openAfterPaidRef.current?.(); return; }
+      if (failed) { setSepayPhase('failed'); return; }
+      if (Date.now() >= sepayDeadline) { setSepayPhase('expired'); return; }
+      timer = setTimeout(tick, SEPAY_POLL_MS);
+    };
+    timer = setTimeout(tick, SEPAY_POLL_MS);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [sepay, sepayPhase, sepayDeadline, orderId, jwt]);
+
+  useEffect(() => {
+    if (!sepay || sepayPhase !== 'waiting') return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [sepay, sepayPhase]);
+
+  const boxNo = selectedBox?.boxNumber;
 
   if (dropOpened) {
     return (
@@ -1262,12 +1366,95 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
         nextStep="CONFIRM_DROP"
         accessCode={orderPin}
         lockerId={activeLockerId}
-        boxLabel={selectedBox?.boxNumber}
+        boxLabel={boxNo}
         showSuccess={showSuccess}
         goHome={goHome}
         dropDoneMessage={`Đã bắt đầu thuê. Dùng mã PIN ${orderPin} để mở lại ô trong thời gian thuê.`} />
     );
   }
+
+  if (paidConfirmed) {
+    return (
+      <div className="screen">
+        <Header onBack={goHome} title="Thanh toán" />
+        <div style={{ maxWidth: 450, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Msg type="success" text={`Đã nhận thanh toán cho đơn ${orderCode || `#${orderId}`}.`} />
+          {loading === 'open' ? (
+            <p className="polling-status" style={{ justifyContent: 'center', fontSize: 14 }}>
+              <Loader2 size={16} style={{ animation: 'spin 0.6s linear infinite' }} />Đang mở ô tủ #{boxNo}...
+            </p>
+          ) : (
+            <Btn onClick={openAfterPaid}><Unlock size={18} /> Mở ô tủ #{boxNo}</Btn>
+          )}
+          {msg && <Msg type="error" text={msg} />}
+        </div>
+      </div>
+    );
+  }
+
+  if (sepay) {
+    const left = Math.max(0, Math.ceil((sepayDeadline - now) / 1000));
+    const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    const showImage = Boolean(sepay.qrImage) && !qrImgFailed;
+    const qrValue = showImage ? '' : (sepay.qrText || sepay.payLink);
+    const viaLink = !showImage && !sepay.qrText && Boolean(sepay.payLink);
+
+    return (
+      <div className="screen">
+        <Header onBack={cancelSepay} title="Chuyển khoản VietQR" />
+        <div className="vietqr-pay">
+          <div className={`vietqr-code ${showImage || qrValue ? '' : 'idle'}`}>
+            {showImage ? (
+              <img src={sepay.qrImage} alt="Mã VietQR" onError={() => setQrImgFailed(true)} />
+            ) : qrValue ? (
+              <QRCodeSVG value={qrValue} size={220} level="M" marginSize={2} />
+            ) : (
+              <><QrCode size={48} /><span>Không tải được mã QR</span></>
+            )}
+          </div>
+
+          <div className="vietqr-info">
+            <h3>{viaLink ? 'Quét bằng camera điện thoại để mở trang thanh toán' : 'Mở app ngân hàng và quét mã VietQR'}</h3>
+            <div className="vietqr-field">
+              <span>Số tiền</span>
+              <strong>{fmt(sepay.amount)}</strong>
+            </div>
+            {sepay.referenceId && (
+              <div className="vietqr-field">
+                <span>Nội dung chuyển khoản</span>
+                <code>{sepay.referenceId}</code>
+              </div>
+            )}
+            <p className="vietqr-note">
+              Giữ nguyên số tiền và nội dung chuyển khoản. Kiosk tự mở ô #{boxNo} khi hệ thống nhận được tiền — đã chuyển rồi thì đừng bấm Huỷ.
+            </p>
+
+            {sepayPhase === 'waiting' && (
+              <>
+                <div className={`qr-login-timer ${left <= 60 ? 'warn' : ''}`}>
+                  <Clock size={16} /> Chờ thanh toán thêm <strong>{mmss}</strong>
+                </div>
+                <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đang chờ xác nhận chuyển khoản...</p>
+              </>
+            )}
+            {sepayPhase === 'paid' && (
+              <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đã nhận tiền, đang mở ô tủ...</p>
+            )}
+            {sepayPhase === 'expired' && <Msg type="error" text="Hết thời gian chờ. Nếu bạn đã chuyển khoản, bấm Kiểm tra lại." />}
+            {sepayPhase === 'failed' && <Msg type="error" text="Giao dịch chuyển khoản không hợp lệ (số tiền không khớp với đơn). Vui lòng liên hệ hỗ trợ Lock.R." />}
+            {msg && <Msg type="error" text={msg} />}
+
+            <div className="vietqr-actions">
+              {sepayPhase === 'expired' && <Btn onClick={recheckSepay}><RefreshCw size={18} /> Kiểm tra lại</Btn>}
+              <Btn variant="secondary" onClick={cancelSepay} disabled={sepayPhase === 'paid'}><X size={18} /> Huỷ</Btn>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const walletShort = wallet != null && wallet.balance < (Number(totalPrice) || 0);
 
   return (
     <div className="screen">
@@ -1280,7 +1467,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
               Xác nhận thanh toán
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-              Quét mã QR tiện lợi qua ứng dụng MoMo / VNPay để mở ô tủ <strong>#{selectedBox?.boxNumber}</strong>
+              Trả bằng Ví LockR hoặc chuyển khoản VietQR để mở ô tủ <strong>#{boxNo}</strong>
             </p>
           </div>
         </div>
@@ -1291,64 +1478,21 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
           <div className="order-row"><CreditCard size={16} /> Cước phí: <strong style={{ color: 'var(--accent)', fontSize: 16 }}>{fmt(totalPrice)}</strong></div>
           {selectedBox && <div className="order-row"><Package size={16} /> Ô tủ được cấp: <strong>#{selectedBox.boxNumber}</strong></div>}
         </div>
-        {!payUrl && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Btn onClick={() => payOnline('MOMO')} loading={loading === 'MOMO'}>
-              <Smartphone size={18} /> Thanh toán MoMo &amp; Mở tủ
-            </Btn>
-            <div className="divider" style={{ margin: '4px 0' }}>Hoặc trải nghiệm nhanh</div>
-            <Btn variant="secondary" onClick={skipPay} loading={loading === 'skip'}>
-              <Banknote size={18} /> Thanh toán Tiền mặt (Demo mở tủ)
-            </Btn>
-            <Btn variant="outline" onClick={() => payOnline('VNPAY')} loading={loading === 'VNPAY'}>
-              <CreditCard size={18} /> Cổng thanh toán VNPay
-            </Btn>
-          </div>
-        )}
 
-        {/* MoMo QR Payment Section */}
-        {payUrl && payMethod === 'MOMO' && (
-          <div className="momo-pay-section">
-            <div className="momo-header">
-              <Smartphone size={20} color="#A50064" />
-              <span>Thanh toán MoMo</span>
-            </div>
-            {qrCodeUrl && (
-              <div className="momo-qr" style={{ padding: 16, background: '#fff', borderRadius: 12, margin: '16px auto', width: 'fit-content' }}>
-                <p className="momo-qr-label" style={{ marginBottom: 16 }}>Quét mã QR bằng ứng dụng MoMo</p>
-                <QRCodeSVG value={qrCodeUrl} size={160} />
-              </div>
-            )}
-            {deeplink && (
-              <a href={deeplink} target="_blank" rel="noreferrer" className="btn btn-momo" style={{ marginTop: 12 }}>
-                <Smartphone size={18} /> Mở ứng dụng MoMo
-              </a>
-            )}
-            {!qrCodeUrl && (
-              <div className="pay-link">
-                <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 8 }}>Mở link để thanh toán MoMo:</p>
-                <a href={payUrl} target="_blank" rel="noreferrer">{payUrl}</a>
-              </div>
-            )}
-            {polling && <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đang chờ xác nhận thanh toán...</p>}
-          </div>
-        )}
-
-        {/* VNPay / Generic Payment Section */}
-        {payUrl && payMethod === 'VNPAY' && (
-          <div className="pay-link">
-            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 8 }}><CreditCard size={14} style={{ verticalAlign: -2, marginRight: 4 }} />Mở link để thanh toán VNPay:</p>
-            <a href={payUrl} target="_blank" rel="noreferrer">{payUrl}</a>
-            {polling && <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đang chờ xác nhận thanh toán...</p>}
-            {!polling && <p>Sau khi thanh toán xong, nhấn nút bên dưới.</p>}
-          </div>
-        )}
-
-        {payUrl && (
-          <Btn onClick={openAfterPay} loading={loading === 'open'} style={{ marginTop: 16 }}>
-            <Unlock size={18} /> Đã thanh toán — Mở tủ
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Btn onClick={payWallet} loading={loading === 'WALLET'} disabled={!!loading || walletShort}>
+            <Wallet size={18} /> Ví LockR
+            {wallet && <span className="btn-note">· Số dư {fmt(wallet.balance)}</span>}
           </Btn>
-        )}
+          {walletShort && <p className="pay-hint">Số dư ví không đủ — nạp thêm trong app Lock.R hoặc chọn Chuyển khoản VietQR.</p>}
+          <Btn variant="outline" onClick={startSepay} loading={loading === 'SEPAY'} disabled={!!loading}>
+            <QrCode size={18} /> Chuyển khoản VietQR
+          </Btn>
+          <div className="divider" style={{ margin: '4px 0' }}>Hoặc trải nghiệm nhanh</div>
+          <Btn variant="secondary" onClick={skipPay} loading={loading === 'skip'}>
+            <Banknote size={18} /> Thanh toán Tiền mặt (Demo mở tủ)
+          </Btn>
+        </div>
         {msg && <Msg type="error" text={msg} />}
       </div>
     </div>
