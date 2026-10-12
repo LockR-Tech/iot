@@ -77,8 +77,14 @@ export const getOrderStatus    = (orderId, token)     => be('GET', `/api/orders/
 export const getOrderByPin     = (pin, token)         => be('GET', `/api/orders/pin/${pin}`, null, token);
 export const getMyOrders       = (token)              => be('GET', '/api/orders/my-orders', null, token);
 
-// ─── Payments ────────────────────────────────────────────────
-export const createPayment     = (token, orderId, method) => be('POST', '/api/payments/checkout', { orderId, method }, token);
+// ─── Payments / Ví ───────────────────────────────────────────
+// Cùng checkout với app mobile; số tiền server tự lấy từ đơn, kiosk không gửi.
+// WALLET: trừ ví ngay (thiếu tiền ⇒ code WALLET_INSUFFICIENT). SEPAY: tạo giao dịch PENDING,
+// trả qrCodeUrl (ảnh VietQR) + referenceId (nội dung chuyển khoản); tiền chỉ được ghi nhận qua webhook SePay.
+export const checkoutWallet    = (token, orderId)     => be('POST', '/api/payments/checkout', { orderId, method: 'WALLET' }, token);
+export const checkoutSepay     = (token, orderId)     => be('POST', '/api/payments/checkout', { orderId, method: 'SEPAY' }, token);
+export const getPayment        = (token, paymentId)   => be('GET', `/api/payments/${paymentId}`, null, token);
+export const getWallet         = (token)              => be('GET', '/api/wallet', null, token);
 
 // ─── IoT (public) ────────────────────────────────────────────
 export const verifyPin         = (pinCode, boxId)     => be('POST', '/api/iot/verify-pin', { pinCode, boxId });
