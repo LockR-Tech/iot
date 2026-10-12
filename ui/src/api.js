@@ -18,11 +18,11 @@
 const BACKEND = import.meta.env.VITE_API_URL || '';
 const LOCAL   = import.meta.env.VITE_LOCAL_API_URL || 'http://localhost:8000';
 
-async function req(base, method, path, body = null, token = null) {
+async function req(base, method, path, body = null, token = null, headers = null) {
   const url = `${base}${path}`;
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
   };
   if (token) opts.headers['Authorization'] = `Bearer ${token}`;
   if (body)  opts.body = JSON.stringify(body);
@@ -38,7 +38,7 @@ async function req(base, method, path, body = null, token = null) {
 }
 
 // Shorthand helpers
-const be  = (m, p, b, t) => req(BACKEND, m, p, b, t);
+const be  = (m, p, b, t, h) => req(BACKEND, m, p, b, t, h);
 const loc = (m, p, b, t) => req(LOCAL,   m, p, b, t);
 
 // ─── Auth ────────────────────────────────────────────────────
@@ -46,6 +46,12 @@ export const sendOtp           = (email)              => be('POST', '/api/auth/e
 export const verifyOtp         = (email, otp)         => be('POST', '/api/auth/email/verify-otp', { email, otp });
 export const phoneLogin        = (idToken)            => be('POST', '/api/auth/firebase', { idToken });
 export const kioskQuickRegister= (tempToken)          => be('POST', '/api/auth/kiosk/quick-register', { tempToken });
+// Đăng nhập kiosk bằng QR: khách quét bằng app rồi xác nhận, kiosk hỏi trạng thái tới khi nhận token.
+// pollToken chỉ đi trong header, không bao giờ hiện lên màn hình (chụp QR không cướp được phiên).
+const qrPollHeader = (pollToken) => ({ 'X-Kiosk-Poll-Token': pollToken });
+export const createKioskQrSession = (lockerId)               => be('POST', '/api/auth/kiosk/qr-sessions', { lockerId });
+export const pollKioskQrSession   = (sessionId, pollToken)   => be('GET', `/api/auth/kiosk/qr-sessions/${encodeURIComponent(sessionId)}`, null, null, qrPollHeader(pollToken));
+export const cancelKioskQrSession = (sessionId, pollToken)   => be('POST', `/api/auth/kiosk/qr-sessions/${encodeURIComponent(sessionId)}/cancel`, null, null, qrPollHeader(pollToken));
 
 // ─── Services / Promotions ───────────────────────────────────
 export const getServices       = (token, lockerId)    => be('GET', `/api/services?lockerId=${lockerId}&category=STORAGE`, null, token);
