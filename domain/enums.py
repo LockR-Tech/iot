@@ -17,6 +17,7 @@ class CommandAction(Enum):
     SETUP_LOCKERS = "SETUP_LOCKERS"
     BULK_SETUP_LOCKERS = "BULK_SETUP_LOCKERS"
     CLEAR_SETUP = "CLEAR_SETUP"
+    RESTART = "RESTART"
 
 
 class AckStatus(Enum):

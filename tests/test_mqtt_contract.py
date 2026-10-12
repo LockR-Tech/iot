@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -24,6 +25,7 @@ from infracstructure.mqtt_client import MQTTClientWrapper
 from services.discovery_service import DiscoveryService
 from services.heartbeat_service import HeartbeatService
 from services.locker_service import LockerService
+import simulate_demo_cabinet
 
 MAC = "2C:CF:67:DB:C5:C3"
 RELAYS = [17, 27, 22, 23, 24, 25, 16]
@@ -32,6 +34,7 @@ DOORS = [5, 6, 12, 13, 19, 26, 20]
 # ─── Payload do iot-service gửi (mqtt-contract.md § 2.1, § 3) ───
 OPEN_CMD = {"commandId": "c-1", "boxId": 12, "box_id": 12, "slotIndex": 3, "action": "OPEN", "timeout": 15}
 SYNC_CMD = {"boxId": 12, "state": "OCCUPIED", "orderId": 99}
+RESTART_CMD = {"commandId": "r-1", "action": "RESTART"}          # khởi động lại bộ điều khiển
 SETUP_CMD = {
     "action": "SETUP_LOCKERS", "commandId": "s-1", "macAddress": MAC,
     "lockerId": 5, "cabinetId": "5", "cabinetCode": "CAB-TU01", "slaveId": 1,
@@ -51,9 +54,16 @@ class FakeMqtt:
     def __init__(self):
         self.published = []
         self.subscriptions = set()
+        self.waited = []          # (topic, qos, tên luồng) của các lần publish có chờ broker xác nhận
+        self.confirm = True       # False = giả lập broker không xác nhận kịp
 
     def publish(self, topic, payload, qos=1):
         self.published.append((topic, json.loads(payload)))
+
+    def publish_and_wait(self, topic, payload, qos=1, timeout=5.0):
+        self.publish(topic, payload, qos)
+        self.waited.append((topic, qos, threading.current_thread().name))
+        return self.confirm
 
     def set_subscriptions(self, topics, qos=1):
         self.subscriptions = set(topics)
@@ -93,11 +103,13 @@ class PiContractTest(unittest.TestCase):
                                         close_wait_ms=1, poll_ms=10_000, debounce_ms=50).start()
 
         self.mqtt = FakeMqtt()
+        self.exits = []                                     # (mã thoát, những gì đã publish trước lúc thoát)
         self.state = CabinetState(state_path=self.state_path, fallback_locker_id="1")
         self.heartbeat = HeartbeatService(self.mqtt, self.state, interval=3600, hardware=self.locker)
         self.discovery = DiscoveryService(self.mqtt, self.locker, cabinet_state=self.state)
         self.service = LockerService(self.mqtt, None, serial_manager=self.locker, cabinet_state=self.state,
-                                     heartbeat_service=self.heartbeat, discovery_service=self.discovery)
+                                     heartbeat_service=self.heartbeat, discovery_service=self.discovery,
+                                     exit_process=lambda code: self.exits.append((code, list(self.mqtt.published))))
         self.locker.on_door_event = self.service.handle_door_event
         self.service.refresh_subscriptions()
 
@@ -179,6 +191,58 @@ class PiContractTest(unittest.TestCase):
         self.send("cabinet/2/command/open", OPEN_CMD)
         self.assertEqual(self.mqtt.published, [])
         self.assertEqual(self.relay_pulses(), [])
+
+    # ─── khởi động lại bộ điều khiển ───
+
+    def test_restart_replies_accepted_then_exits_nonzero(self):
+        self.send("cabinet/1/command/restart", RESTART_CMD)
+
+        (result,) = self.mqtt.on("cabinet/1/command/restart/result")
+        self.assertEqual(result, {"commandId": "r-1", "status": "ACCEPTED"})
+        ((code, published_before_exit),) = self.exits
+        self.assertNotEqual(code, 0, "mã 0 thì systemd Restart=on-failure không chạy lại dịch vụ")
+        self.assertIn(("cabinet/1/command/restart/result", result), published_before_exit)
+        self.assertEqual(self.relay_pulses(), [])
+
+    def test_restart_result_is_qos1_confirmed_off_the_mqtt_thread(self):
+        self.send("cabinet/1/command/restart", RESTART_CMD)
+        ((topic, qos, thread_name),) = self.mqtt.waited
+        self.assertEqual((topic, qos), ("cabinet/1/command/restart/result", 1))
+        # Chờ PUBACK trên luồng mạng của paho sẽ treo — handler phải chạy trên luồng lệnh riêng
+        self.assertTrue(thread_name.startswith("LockerCmd"), thread_name)
+
+    def test_restart_still_exits_when_broker_does_not_confirm(self):
+        self.mqtt.confirm = False
+        self.send("cabinet/1/command/restart", RESTART_CMD)
+        self.assertEqual([code for code, _ in self.exits], [75])
+
+    def test_restart_waits_for_running_open_command(self):
+        self.pins.levels[DOORS[3]] = True
+        self.service.handle_incoming_message("cabinet/1/command/open", json.dumps(OPEN_CMD))
+        self.send("cabinet/1/command/restart", RESTART_CMD)
+        self.assertEqual([t for t in self.mqtt.topics() if t.endswith("/result")],
+                         ["cabinet/1/command/open/result", "cabinet/1/command/restart/result"])
+        self.assertEqual(len(self.exits), 1)
+
+    def test_duplicate_restart_is_answered_but_exits_once(self):
+        self.send("cabinet/1/command/restart", RESTART_CMD)
+        self.send("cabinet/1/command/restart", {**RESTART_CMD, "commandId": "r-2"})
+        results = self.mqtt.on("cabinet/1/command/restart/result")
+        self.assertEqual([(r["commandId"], r["status"]) for r in results],
+                         [("r-1", "ACCEPTED"), ("r-2", "ACCEPTED")])
+        self.assertEqual(len(self.exits), 1)
+
+    def test_restart_with_other_action_fails_without_exiting(self):
+        self.send("cabinet/1/command/restart", {"commandId": "r-3", "action": "OPEN"})
+        (result,) = self.mqtt.on("cabinet/1/command/restart/result")
+        self.assertEqual((result["commandId"], result["status"]), ("r-3", "FAILED"))
+        self.assertTrue(result["errorMessage"])
+        self.assertEqual(self.exits, [])
+
+    def test_restart_for_another_locker_is_ignored(self):
+        self.send("cabinet/2/command/restart", RESTART_CMD)
+        self.assertEqual(self.mqtt.published, [])
+        self.assertEqual(self.exits, [])
 
     # ─── sự kiện cửa ───
 
@@ -270,6 +334,28 @@ class PiContractTest(unittest.TestCase):
         self.assertEqual(payload["slaves"], [{"slaveId": 1, "availableSlots": 7}])
 
 
+class SimulatorContractTest(unittest.TestCase):
+    """simulate_demo_cabinet.py trả lời lệnh restart như tủ thật nhưng không thoát."""
+
+    def deliver(self, topic, payload):
+        client = mock.MagicMock()
+        msg = mock.MagicMock(topic=topic, payload=json.dumps(payload).encode())
+        simulate_demo_cabinet._on_message(client, None, msg)
+        return {c.args[0]: json.loads(c.args[1]) for c in client.publish.call_args_list}
+
+    def test_restart_is_accepted(self):
+        with mock.patch.object(simulate_demo_cabinet, "SIM_FORCE_FAIL", False):
+            sent = self.deliver("cabinet/7/command/restart", RESTART_CMD)
+        self.assertEqual(sent["cabinet/7/command/restart/result"], {"commandId": "r-1", "status": "ACCEPTED"})
+
+    def test_restart_force_fail(self):
+        with mock.patch.object(simulate_demo_cabinet, "SIM_FORCE_FAIL", True):
+            sent = self.deliver("cabinet/7/command/restart", RESTART_CMD)
+        result = sent["cabinet/7/command/restart/result"]
+        self.assertEqual((result["commandId"], result["status"]), ("r-1", "FAILED"))
+        self.assertTrue(result["errorMessage"])
+
+
 class MqttWrapperTest(unittest.TestCase):
     def setUp(self):
         self.patch = mock.patch.object(settings, "MAC_ADDRESS", MAC)
@@ -295,6 +381,21 @@ class MqttWrapperTest(unittest.TestCase):
         self.wrapper.set_subscriptions({"cabinet/5/command/+"})
         self.client.unsubscribe.assert_called_with("cabinet/1/command/+")
         self.client.subscribe.assert_called_with("cabinet/5/command/+", qos=1)
+
+    def test_publish_and_wait_returns_true_after_broker_ack(self):
+        info = self.client.publish.return_value
+        info.is_published.return_value = True
+        self.assertTrue(self.wrapper.publish_and_wait("cabinet/1/command/restart/result", "{}", qos=1, timeout=2))
+        self.client.publish.assert_called_once_with("cabinet/1/command/restart/result", "{}", qos=1)
+        info.wait_for_publish.assert_called_once_with(2)
+
+    def test_publish_and_wait_reports_unconfirmed_or_failed_publish(self):
+        info = self.client.publish.return_value
+        info.is_published.return_value = False                # hết giờ mà chưa có PUBACK
+        self.assertFalse(self.wrapper.publish_and_wait("t", "{}", timeout=0.01))
+
+        info.wait_for_publish.side_effect = RuntimeError("The client is not currently connected.")
+        self.assertFalse(self.wrapper.publish_and_wait("t", "{}", timeout=0.01))
 
     def test_refuses_to_send_password_without_tls(self):
         with mock.patch.object(settings, "MQTT_USE_TLS", False), \
