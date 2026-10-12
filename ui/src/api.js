@@ -71,7 +71,6 @@ export const createOrder       = (token, data)        => be('POST', '/api/orders
 // createRentalOrder: dùng endpoint /api/orders/rental — gateway gắn X-User-Id từ JWT
 // → đơn hàng sẽ được liên kết đúng với user, hiển thị trong mobile app
 export const createRentalOrder = (token, data)        => be('POST', '/api/orders/rental', data, token);
-export const mockPaymentCheckout = (token, orderId)   => be('POST', '/api/payments/checkout', { orderId, method: 'CASH' }, token);
 export const confirmOrder      = (token, orderId)     => be('PUT', `/api/orders/${orderId}/confirm`, null, token);
 export const getOrderStatus    = (orderId, token)     => be('GET', `/api/orders/${orderId}/status`, null, token);
 export const getOrderByPin     = (pin, token)         => be('GET', `/api/orders/pin/${pin}`, null, token);
@@ -81,10 +80,8 @@ export const getMyOrders       = (token)              => be('GET', '/api/orders/
 // Cùng checkout với app mobile; số tiền server tự lấy từ đơn, kiosk không gửi.
 // WALLET: trừ ví ngay (thiếu tiền ⇒ code WALLET_INSUFFICIENT). SEPAY: tạo giao dịch PENDING,
 // trả qrCodeUrl (ảnh VietQR) + referenceId (nội dung chuyển khoản); tiền chỉ được ghi nhận qua webhook SePay.
-export const checkoutWallet    = (token, orderId)     => be('POST', '/api/payments/checkout', { orderId, method: 'WALLET' }, token);
 export const checkoutSepay     = (token, orderId)     => be('POST', '/api/payments/checkout', { orderId, method: 'SEPAY' }, token);
 export const getPayment        = (token, paymentId)   => be('GET', `/api/payments/${paymentId}`, null, token);
-export const getWallet         = (token)              => be('GET', '/api/wallet', null, token);
 
 // ─── IoT (public) ────────────────────────────────────────────
 export const verifyPin         = (pinCode, boxId)     => be('POST', '/api/iot/verify-pin', { pinCode, boxId });

@@ -5,8 +5,8 @@ import {
   Lock, Package, Smartphone, Mail, ArrowLeft, MapPin,
   CheckCircle, KeyRound, Hash, User, CreditCard,
   Unlock, Home, Loader2, Delete, Circle, ClipboardList,
-  Wifi, ChevronRight, ShieldCheck, X, Banknote,
-  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, Wallet
+  Wifi, ChevronRight, ShieldCheck, X,
+  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import boxStack3d from '../assets/illustrations/box_stack_3d.png';
@@ -1158,14 +1158,13 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
 
 
 // ============================================
-// PAYMENT (Ví LockR / Chuyển khoản VietQR qua SePay)
+// PAYMENT (chỉ chuyển khoản VietQR qua SePay)
 // ============================================
 // Chỉ mở ô khi server báo đơn đã PAID (GET /api/orders/{id}/status → isPaid): client không bao giờ
-// tự coi là đã trả. Mã lỗi theo payment-service (PaymentService.checkout, WalletService.debit).
+// tự coi là đã trả. Mã lỗi theo payment-service (PaymentService.checkout).
 const PAY_ERROR_TEXT = {
-  WALLET_INSUFFICIENT: 'Số dư Ví LockR không đủ để thanh toán đơn này. Nạp thêm trong app Lock.R hoặc chọn Chuyển khoản VietQR.',
-  PAYMENT_METHOD_DISABLED: 'Phương thức thanh toán này đang tạm tắt. Vui lòng chọn cách khác.',
-  PAYMENT_METHOD_INVALID: 'Phương thức thanh toán không hợp lệ. Vui lòng chọn cách khác.',
+  PAYMENT_METHOD_DISABLED: 'Thanh toán chuyển khoản đang tạm tắt. Vui lòng liên hệ hỗ trợ.',
+  PAYMENT_METHOD_INVALID: 'Phương thức thanh toán không hợp lệ.',
   ORDER_LOOKUP_FAILED: 'Không lấy được thông tin đơn. Vui lòng thử lại.',
 };
 const payErrorText = (res, fallback) => PAY_ERROR_TEXT[res?.code] || res?.message || fallback;
@@ -1176,7 +1175,6 @@ const SEPAY_WAIT_MS = 10 * 60 * 1000;     // chờ chuyển khoản tối đa 10
 function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPrice, selectedBox, showSuccess, activeLockerId }) {
   const [loading, setLoading] = useState('');
   const [msg, setMsg] = useState('');
-  const [wallet, setWallet] = useState(null);              // { balance } khi đọc được số dư ví
   const [sepay, setSepay] = useState(null);                // giao dịch VietQR đang chờ: { paymentId, referenceId, amount, qrImage, qrText, payLink }
   const [sepayPhase, setSepayPhase] = useState('waiting'); // waiting | paid | expired | failed
   const [sepayDeadline, setSepayDeadline] = useState(0);
@@ -1194,15 +1192,6 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
   }, []);
 
   const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
-
-  const loadWallet = useCallback(async () => {
-    try {
-      const res = await api.getWallet(jwt);
-      if (aliveRef.current && res.success && res.data) setWallet({ balance: Number(res.data.balance) || 0 });
-    } catch { /* không đọc được số dư thì vẫn cho bấm, server tự kiểm tra */ }
-  }, [jwt]);
-
-  useEffect(() => { loadWallet(); }, [loadWallet]);
 
   // Thanh toán được ghi nhận bất đồng bộ (qua sự kiện payment → order), nên phải đợi đơn
   // thật sự PAID rồi mới mở ô — backend từ chối mở ô bỏ hàng khi đơn chưa thanh toán.
@@ -1229,19 +1218,6 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     }
   };
 
-  const skipPay = async () => {
-    setLoading('skip'); setMsg('');
-    try {
-      await api.mockPaymentCheckout(jwt, orderId).catch(() => {});
-      if (!(await waitUntilPaid())) {
-        setMsg('Chưa ghi nhận được thanh toán. Vui lòng thử lại sau giây lát.');
-      } else {
-        await openForDrop();
-      }
-    } catch { setMsg('Lỗi kết nối'); }
-    setLoading('');
-  };
-
   // Server đã báo PAID: sang bước mở ô (mở lỗi thì còn nút "Mở ô tủ" để thử lại, không trả lại lần nữa).
   const openAfterPaid = async () => {
     if (!aliveRef.current) return;
@@ -1261,22 +1237,6 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     } else if (aliveRef.current) {
       setMsg('Chưa ghi nhận được thanh toán. Vui lòng thử lại sau giây lát.');
     }
-  };
-
-  const payWallet = async () => {
-    setLoading('WALLET'); setMsg('');
-    try {
-      const res = await api.checkoutWallet(jwt, orderId);
-      // ORDER_ALREADY_PAID: lần bấm trước đã trừ ví nhưng chờ quá lâu — không trừ lại, chỉ đợi PAID.
-      if (res.success || res.code === 'ORDER_ALREADY_PAID') {
-        loadWallet();
-        await openWhenServerPaid();
-      } else {
-        setMsg(payErrorText(res, 'Không thanh toán được bằng ví. Vui lòng thử lại.'));
-        if (res.code === 'WALLET_INSUFFICIENT') loadWallet();
-      }
-    } catch { setMsg('Lỗi kết nối'); }
-    setLoading('');
   };
 
   const startSepay = async () => {
@@ -1313,6 +1273,14 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     } catch { setMsg('Lỗi kết nối'); }
     setLoading('');
   };
+
+  // Chỉ có một cách trả (SePay) ⇒ vào màn là tạo mã VietQR ngay, đúng một lần (StrictMode chạy effect hai lần).
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    startSepay();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Chỉ dừng chờ trên kiosk; giao dịch PENDING vẫn còn, tiền chuyển muộn vẫn được webhook ghi nhận.
   const cancelSepay = () => {
@@ -1454,8 +1422,6 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     );
   }
 
-  const walletShort = wallet != null && wallet.balance < (Number(totalPrice) || 0);
-
   return (
     <div className="screen">
       <Header onBack={goHome} title="Thanh toán" />
@@ -1467,7 +1433,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
               Xác nhận thanh toán
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-              Trả bằng Ví LockR hoặc chuyển khoản VietQR để mở ô tủ <strong>#{boxNo}</strong>
+              Chuyển khoản VietQR để mở ô tủ <strong>#{boxNo}</strong>
             </p>
           </div>
         </div>
@@ -1480,17 +1446,9 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Btn onClick={payWallet} loading={loading === 'WALLET'} disabled={!!loading || walletShort}>
-            <Wallet size={18} /> Ví LockR
-            {wallet && <span className="btn-note">· Số dư {fmt(wallet.balance)}</span>}
-          </Btn>
-          {walletShort && <p className="pay-hint">Số dư ví không đủ — nạp thêm trong app Lock.R hoặc chọn Chuyển khoản VietQR.</p>}
-          <Btn variant="outline" onClick={startSepay} loading={loading === 'SEPAY'} disabled={!!loading}>
+          {/* Màn tự tạo mã VietQR khi mở; nút này để tạo lại khi lần tạo trước lỗi. */}
+          <Btn onClick={startSepay} loading={loading === 'SEPAY'} disabled={!!loading}>
             <QrCode size={18} /> Chuyển khoản VietQR
-          </Btn>
-          <div className="divider" style={{ margin: '4px 0' }}>Hoặc trải nghiệm nhanh</div>
-          <Btn variant="secondary" onClick={skipPay} loading={loading === 'skip'}>
-            <Banknote size={18} /> Thanh toán Tiền mặt (Demo mở tủ)
           </Btn>
         </div>
         {msg && <Msg type="error" text={msg} />}
