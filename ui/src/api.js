@@ -75,6 +75,7 @@ export const confirmOrder      = (token, orderId)     => be('PUT', `/api/orders/
 export const getOrderStatus    = (orderId, token)     => be('GET', `/api/orders/${orderId}/status`, null, token);
 export const getOrderByPin     = (pin, token)         => be('GET', `/api/orders/pin/${pin}`, null, token);
 export const getMyOrders       = (token)              => be('GET', '/api/orders/my-orders', null, token);
+export const cancelOrder       = (token, orderId)     => be('PUT', `/api/orders/${orderId}/cancel`, null, token);
 
 // ─── Payments / Ví ───────────────────────────────────────────
 // Cùng checkout với app mobile; số tiền server tự lấy từ đơn, kiosk không gửi.

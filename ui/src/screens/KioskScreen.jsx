@@ -740,7 +740,10 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
     const status = String(order.status || '').toUpperCase();
     const lockerId = order.lockerId ?? order.locker?.id;
     const hasCredential = Boolean(order.pinCode);
-    return ['INITIALIZED', 'STORING', 'RETURNED'].includes(status)
+    const isPaid = Boolean(order.isPaid || String(order.paymentStatus || '').toUpperCase() === 'PAID');
+    // Đơn INITIALIZED chỉ cho phép quản lý khi ĐÃ THANH TOÁN; đơn chưa thanh toán không được coi là ô của bạn
+    const validStatus = status === 'INITIALIZED' ? isPaid : ['STORING', 'RETURNED'].includes(status);
+    return validStatus
       && lockerId === activeLockerId
       && hasCredential;
   };
@@ -1282,9 +1285,22 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     startSepay();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Chỉ dừng chờ trên kiosk; giao dịch PENDING vẫn còn, tiền chuyển muộn vẫn được webhook ghi nhận.
-  const cancelSepay = () => {
-    setSepay(null); setSepayPhase('waiting'); setMsg('');
+  const [canceling, setCanceling] = useState(false);
+
+  // Khách bấm Hủy hoặc Back: hủy đơn trên backend để giải phóng ô ngay lập tức
+  const handleCancelPayment = async () => {
+    if (canceling) return;
+    setCanceling(true);
+    if (orderId) {
+      try {
+        await api.cancelOrder(jwt, orderId);
+        console.log('%c[PAYMENT] Canceled unpaid order and released box:', 'color:#f87171', orderId);
+      } catch (err) {
+        console.error('Failed to cancel order on exit:', err);
+      }
+    }
+    setCanceling(false);
+    goHome();
   };
 
   const recheckSepay = () => {
@@ -1369,7 +1385,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
     return (
       <div className="screen">
-        <Header onBack={cancelSepay} title="Chuyển khoản VietQR" />
+        <Header onBack={handleCancelPayment} title="Chuyển khoản VietQR" />
         <div className="vietqr-pay">
           <div className={`vietqr-code ${showImage || qrValue ? '' : 'idle'}`}>
             {showImage ? (
@@ -1414,7 +1430,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
             <div className="vietqr-actions">
               {sepayPhase === 'expired' && <Btn onClick={recheckSepay}><RefreshCw size={18} /> Kiểm tra lại</Btn>}
-              <Btn variant="secondary" onClick={cancelSepay} disabled={sepayPhase === 'paid'}><X size={18} /> Huỷ</Btn>
+              <Btn variant="secondary" onClick={handleCancelPayment} disabled={sepayPhase === 'paid'} loading={canceling}><X size={18} /> Huỷ &amp; Trả lại ô tủ</Btn>
             </div>
           </div>
         </div>
@@ -1424,7 +1440,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
   return (
     <div className="screen">
-      <Header onBack={goHome} title="Thanh toán" />
+      <Header onBack={handleCancelPayment} title="Thanh toán" />
       <div style={{ maxWidth: 500, margin: '0 auto', width: '100%' }}>
         <div className="payment-3d-hero">
           <img src={mobilePay3d} alt="Payment" className="payment-3d-img" />
@@ -1449,6 +1465,9 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
           {/* Màn tự tạo mã VietQR khi mở; nút này để tạo lại khi lần tạo trước lỗi. */}
           <Btn onClick={startSepay} loading={loading === 'SEPAY'} disabled={!!loading}>
             <QrCode size={18} /> Chuyển khoản VietQR
+          </Btn>
+          <Btn variant="outline" onClick={handleCancelPayment} loading={canceling} style={{ borderColor: '#ef4444', color: '#ef4444' }}>
+            <X size={18} /> Hủy đặt &amp; Trả lại ô tủ
           </Btn>
         </div>
         {msg && <Msg type="error" text={msg} />}
