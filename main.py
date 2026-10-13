@@ -1,3 +1,4 @@
+import os
 import time
 import signal
 import sys
@@ -11,18 +12,33 @@ from infracstructure.database import DatabaseManager
 from services.locker_service import LockerService
 from services.heartbeat_service import HeartbeatService
 from services.discovery_service import DiscoveryService
+from services.ble_service import BleAdvertiserService
 from utils.logger import get_logger
 
 logger = get_logger("Main")
 
 # ─── Graceful shutdown ───
 _running = True
+_exit_code = 0
+# Lệnh restart: dừng êm không xong trong chừng này giây (luồng nào đó treo) thì ép thoát.
+RESTART_FORCE_EXIT_SECONDS = 20
 
 
 def _signal_handler(sig, frame):
     global _running
     logger.info(f"Received signal {sig}, shutting down...")
     _running = False
+
+
+def _request_restart(code: int):
+    """Lệnh restart từ backend (LockerService đã báo ACCEPTED): dừng các dịch vụ như khi nhận SIGTERM
+    nhưng thoát với mã khác 0 để systemd chạy lại lockr-controller. Không reboot máy."""
+    global _running, _exit_code
+    _exit_code = code
+    _running = False
+    watchdog = threading.Timer(RESTART_FORCE_EXIT_SECONDS, os._exit, args=(code,))
+    watchdog.daemon = True
+    watchdog.start()
 
 
 signal.signal(signal.SIGINT, _signal_handler)
@@ -54,7 +70,6 @@ def main():
     # SIMULATION=true cho phép chạy trên PC không có phần cứng (mặc định false).
     # HARDWARE_BACKEND=gpio: relay + cảm biến nối thẳng GPIO của Pi; mặc định rs485 (Arduino).
     # Hai loại có cùng giao diện nên các service bên dưới không phân biệt.
-    import os
     simulation = os.getenv("SIMULATION", "false").lower() == "true"
     lids = {}   # {số trục: LidController}
     if settings.HARDWARE_BACKEND == "gpio" and not simulation:
@@ -123,6 +138,7 @@ def main():
         heartbeat_service=heartbeat_service,
         db_manager=db_manager,
         discovery_service=discovery_service,
+        exit_process=_request_restart,
     )
     logger.info("[7/7] Services ready (Locker, Heartbeat, Discovery)")
 
@@ -139,11 +155,15 @@ def main():
     # Start services at INFO level
     logger.info("System initializing...")
 
-    # 8. Kết nối MQTT & start — topic lệnh được nhớ và subscribe lại sau mỗi lần kết nối
+    # 8. Kết nối MQTT, Heartbeat & khởi động BLE Advertising
     locker_service.refresh_subscriptions()
     mqtt_wrapper.start()
     heartbeat_service.start()
-    
+
+    # 9. Khởi tạo & phát sóng BLE Beacon cho App Mobile nhận diện mở tủ
+    ble_service = BleAdvertiserService(cabinet_state=cabinet_state)
+    ble_service.start()
+
     logger.warning("✅ System is READY (Logged at WARNING level)")
 
     # Giữ chương trình chạy
@@ -154,14 +174,18 @@ def main():
         pass
     finally:
         logger.info("Shutting down...")
+        ble_service.stop()
         heartbeat_service.stop()
         locker_service.shutdown()
         for lid in lids.values():
             lid.shutdown()
         serial_manager.close()
         mqtt_wrapper.stop()
+        if _exit_code:
+            logger.warning(f"Thoát với mã {_exit_code} để systemd khởi động lại lockr-controller")
         logger.info("Goodbye!")
+    return _exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

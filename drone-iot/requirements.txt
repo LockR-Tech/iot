@@ -1,0 +1,3 @@
+pymavlink==2.4.50
+paho-mqtt==2.1.0
+pyserial==3.5

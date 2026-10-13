@@ -1,15 +1,28 @@
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 from config.settings import settings
 from domain.enums import CommandAction, LockerHwState
 from services.setup_handler import SetupHandler
 from utils.logger import get_logger
 
 logger = get_logger("LockerService")
+
+# Mã thoát khi tự khởi động lại theo lệnh restart: khác 0 để systemd chạy lại lockr-controller với cả
+# Restart=always lẫn Restart=on-failure (75 = EX_TEMPFAIL — lỗi tạm thời, chạy lại là được).
+RESTART_EXIT_CODE = 75
+# Chờ broker xác nhận kết quả restart tối đa chừng này giây rồi mới thoát.
+RESTART_RESULT_TIMEOUT = 5.0
+
+
+def _exit_process(code: int):
+    """Mặc định khi không truyền exit_process: thoát ngay cả tiến trình.
+    Handler chạy trên luồng phụ nên sys.exit chỉ dừng luồng đó, phải dùng os._exit."""
+    os._exit(code)
 
 
 class LockerService:
@@ -19,6 +32,8 @@ class LockerService:
 
         cabinet/{lockerId}/command/open|close|sync   ← backend
         cabinet/{lockerId}/command/open/result        → backend (khớp commandId)
+        cabinet/{lockerId}/command/restart            ← backend (KTV khởi động lại bộ điều khiển)
+        cabinet/{lockerId}/command/restart/result     → backend (ACCEPTED rồi tiến trình thoát)
         cabinet/{lockerId}/locker/{slotIndex}/status  → backend (sự kiện cửa)
         iot/{mac}/command/setup|clear-setup           ← backend (admin gán tủ)
         iot/{mac}/discovery/start                     ← backend
@@ -27,7 +42,8 @@ class LockerService:
     def __init__(self, mqtt_client, hardware_controller,
                  serial_manager=None, cabinet_state=None,
                  heartbeat_service=None, db_manager=None,
-                 discovery_service=None):
+                 discovery_service=None,
+                 exit_process: Optional[Callable[[int], None]] = None):
         self.mqtt = mqtt_client
         self.hw = hardware_controller
         self.serial = serial_manager
@@ -35,6 +51,10 @@ class LockerService:
         self.heartbeat = heartbeat_service
         self.db = db_manager
         self.discovery = discovery_service
+        # Gọi với RESTART_EXIT_CODE sau khi báo kết quả lệnh restart. main.py truyền hàm dừng êm
+        # các dịch vụ rồi thoát; test truyền hàm ghi lại để không giết tiến trình test.
+        self._exit_process = exit_process or _exit_process
+        self._restart_requested = False
 
         # Lệnh phần cứng chạy tuần tự trên một luồng riêng: một lần mở mất ~3 s,
         # chạy thẳng trong callback MQTT sẽ chặn cả vòng lặp mạng của paho.
@@ -93,6 +113,7 @@ class LockerService:
             cabinet/{lockerId}/command/open
             cabinet/{lockerId}/command/close
             cabinet/{lockerId}/command/sync
+            cabinet/{lockerId}/command/restart
         """
         try:
             # Log MQTT message to database
@@ -152,6 +173,10 @@ class LockerService:
             self._executor.submit(self._safe, self._handle_close_command, cab, data)
         elif action == "sync":
             self._handle_sync_command(cab, data)
+        elif action == "restart":
+            # Cùng hàng đợi với lệnh phần cứng: lệnh mở đang chạy dở xong rồi mới thoát. Cũng không được
+            # chạy trên luồng mạng của paho — luồng đó phải rảnh để nhận PUBACK của kết quả.
+            self._executor.submit(self._safe, self._handle_restart_command, cab, data)
         else:
             logger.debug(f"Unhandled command: {topic}")
 
@@ -324,6 +349,41 @@ class LockerService:
         """Topic: cabinet/{lockerId}/command/sync — backend báo trạng thái đặt chỗ của ô, không cần phản hồi."""
         slot_index, box_id = self._resolve_slot(cab, data)
         logger.info(f"SYNC: locker={cab['id']} slot={slot_index} box={box_id} state={data.get('state')}")
+
+    # ═══════════════════════════════════════════════════════════
+    #  RESTART (BE → RPi)
+    # ═══════════════════════════════════════════════════════════
+
+    def _handle_restart_command(self, cab: dict, data: dict):
+        """Topic: cabinet/{lockerId}/command/restart — báo ACCEPTED rồi thoát để systemd chạy lại dịch vụ.
+
+        Chỉ khởi động lại tiến trình lockr-controller, không reboot máy. Kết quả gửi QoS 1 và chờ broker
+        xác nhận trước khi thoát; quá RESTART_RESULT_TIMEOUT vẫn thoát (lệnh đã tới Pi, backend sẽ báo TIMEOUT).
+        """
+        command_id = data.get("commandId")
+        topic = f"cabinet/{cab['id']}/command/restart/result"
+        action = data.get("action")
+        if action is not None and action != CommandAction.RESTART.value:
+            logger.error(f"RESTART {command_id}: action không hợp lệ ({action}) — không khởi động lại")
+            self.mqtt.publish(topic, json.dumps({
+                "commandId": command_id,
+                "status": "FAILED",
+                "errorMessage": f"Lệnh restart có action không hợp lệ: {action}",
+            }), qos=1)
+            return
+
+        logger.warning(f"🔄 RESTART REQUEST: locker={cab['id']}, cmdId={command_id}")
+        accepted = json.dumps({"commandId": command_id, "status": "ACCEPTED"})
+        if not self.mqtt.publish_and_wait(topic, accepted, qos=1, timeout=RESTART_RESULT_TIMEOUT):
+            logger.error(f"RESTART {command_id}: broker chưa xác nhận kết quả — vẫn khởi động lại")
+
+        if self._restart_requested:
+            # QoS 1 có thể giao lại lệnh, hoặc KTV bấm lại khi tiến trình đang dừng: trả lời nhưng không thoát lần nữa
+            logger.info(f"RESTART {command_id}: đang khởi động lại rồi, bỏ qua lệnh trùng")
+            return
+        self._restart_requested = True
+        logger.warning(f"🔄 Thoát với mã {RESTART_EXIT_CODE} để systemd khởi động lại lockr-controller")
+        self._exit_process(RESTART_EXIT_CODE)
 
     # ═══════════════════════════════════════════════════════════
     #  DOOR EVENT (cảm biến → RPi → BE)

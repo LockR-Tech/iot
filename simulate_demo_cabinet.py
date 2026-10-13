@@ -30,6 +30,12 @@ on `cabinet/{lockerId}/locker/{slotIndex}/status` (`{"slotIndex": <n>, "boxId": 
 truth separately from the order-driven box status, so ops can spot mismatches.
 An older backend that sends no `slotIndex` gets the old shape (`slotIndex` = box id).
 
+Controller restart: iot-service publishes `cabinet/{lockerId}/command/restart` with body
+`{"commandId": "...", "action": "RESTART"}` and waits for
+`cabinet/{lockerId}/command/restart/result` (`{"commandId": "...", "status": "ACCEPTED"}`).
+The real controller replies and then exits so systemd restarts `lockr-controller`; this
+script only replies ACCEPTED (FAILED with SIM_FORCE_FAIL) and keeps running.
+
 Usage:
     uv run python simulate_demo_cabinet.py
     SIM_FORCE_FAIL=true uv run python simulate_demo_cabinet.py   # test the failure path
@@ -43,7 +49,7 @@ configured):
     MQTT_BROKER / MQTT_PORT   alternative host/port pair if you'd rather set those
     MQTT_USERNAME / MQTT_PASSWORD   account on the private broker (never sent without TLS)
     SIM_DELAY_SECONDS  simulated door latency before replying (default 1.5)
-    SIM_FORCE_FAIL     "true" to always reply FAILED, for testing the error path
+    SIM_FORCE_FAIL     "true" to always reply FAILED (open and restart), for testing the error path
     SIM_HEARTBEAT_SECONDS    how often to heartbeat known cabinets (default 30)
     SIM_HEARTBEAT_CABINETS   comma-separated cabinet/locker ids to mark ONLINE
                              up-front, e.g. "2,3" (otherwise learned from traffic)
@@ -69,6 +75,10 @@ OPEN_COMMAND_TOPIC = "cabinet/+/command/open"
 # forget on the backend side (no reply expected) -- we just log it as if the
 # cabinet were updating its on-screen cell map.
 SYNC_COMMAND_TOPIC = "cabinet/+/command/sync"
+# Controller restart: the real cabinet replies ACCEPTED then exits for systemd to
+# restart it. The simulator just replies, so the technician "restart" button can be
+# demoed end to end without killing anything.
+RESTART_COMMAND_TOPIC = "cabinet/+/command/restart"
 SIM_DELAY_SECONDS = float(os.getenv("SIM_DELAY_SECONDS", "1.5"))
 SIM_FORCE_FAIL = os.getenv("SIM_FORCE_FAIL", "false").lower() == "true"
 # Door auto-close (GAP 2): after a successful open, the cabinet reports the box
@@ -154,8 +164,9 @@ def _heartbeat_loop(client: mqtt.Client):
 
 def _on_connect(client, userdata, flags, reason_code, properties=None):
     if reason_code == 0:
-        print(f"[SIM] Connected. Subscribing to {OPEN_COMMAND_TOPIC} and {SYNC_COMMAND_TOPIC}")
-        client.subscribe([(OPEN_COMMAND_TOPIC, 1), (SYNC_COMMAND_TOPIC, 1)])
+        print(f"[SIM] Connected. Subscribing to {OPEN_COMMAND_TOPIC}, {SYNC_COMMAND_TOPIC} "
+              f"and {RESTART_COMMAND_TOPIC}")
+        client.subscribe([(OPEN_COMMAND_TOPIC, 1), (SYNC_COMMAND_TOPIC, 1), (RESTART_COMMAND_TOPIC, 1)])
         # Announce seeded cabinets ONLINE right after (re)connect.
         with _known_lock:
             cabinets = list(_known_cabinets)
@@ -214,6 +225,21 @@ def _reply_after_delay(client: mqtt.Client, locker_id: str, command_id, box_id, 
         ).start()
 
 
+def _reply_restart(client: mqtt.Client, locker_id: str, data: dict):
+    """Answer a controller restart command. The real controller (main.py) publishes
+    ACCEPTED and then exits so systemd restarts it; the simulator only replies."""
+    command_id = data.get("commandId")
+    if SIM_FORCE_FAIL:
+        payload = {"commandId": command_id, "status": "FAILED",
+                   "errorMessage": "Simulated restart failure"}
+    else:
+        payload = {"commandId": command_id, "status": "ACCEPTED"}
+    result_topic = f"cabinet/{locker_id}/command/restart/result"
+    client.publish(result_topic, json.dumps(payload), qos=1)
+    print(f"[SIM] RESTART request: locker={locker_id} commandId={command_id} -> "
+          f"{payload['status']} on {result_topic} (simulator keeps running)")
+
+
 def _on_message(client, userdata, msg):
     parts = msg.topic.split("/")
     if len(parts) < 2:
@@ -235,6 +261,10 @@ def _on_message(client, userdata, msg):
         order_part = f" order={order_id}" if order_id is not None else ""
         print(f"[SIM] SYNC: cabinet display updated -> locker={locker_id} box={box_id} "
               f"slot={data.get('slotIndex')} state={state}{order_part}")
+        return
+
+    if msg.topic.endswith("/command/restart"):
+        _reply_restart(client, locker_id, data)
         return
 
     command_id = data.get("commandId")

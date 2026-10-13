@@ -353,6 +353,33 @@ html, body, #root {
 .login-tab.active  { background: var(--accent-dim); border-color: rgba(79,156,249,0.3); color: var(--accent); }
 .login-tab:hover:not(.active) { background: var(--bg-card-hover); }
 
+/* ─── Đăng nhập bằng QR (KioskScreen › QrLoginPanel) ───── */
+/* QR bên trái, hướng dẫn + đếm ngược bên phải: vừa khung 1024×600 không phải cuộn. */
+.qr-login { display: flex; gap: 28px; align-items: flex-start; }
+.qr-login-code {
+  flex-shrink: 0; width: 228px; height: 228px; padding: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: #fff; border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.qr-login-code.idle { background: var(--bg-card-hover); box-shadow: none; color: var(--text-muted); font-size: 13px; font-weight: 600; text-align: center; }
+.qr-login-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.qr-login-info h3 { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+.qr-login-steps { padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.45; color: var(--text-secondary); }
+.qr-login-timer {
+  display: flex; align-items: center; gap: 8px; width: fit-content;
+  padding: 8px 14px; border-radius: 20px; font-size: 14px; font-weight: 600;
+  background: var(--accent-dim); color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.qr-login-timer.warn { background: rgba(245,158,11,0.12); color: var(--warning); }
+.qr-login-info .polling-status { margin-top: 0; }
+.qr-login-info .msg { margin-top: 0; }
+.qr-login-manual { font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+.qr-login-manual code {
+  font-family: monospace; font-size: 12px; color: var(--text-secondary);
+  background: rgba(0,0,0,0.05); padding: 1px 6px; border-radius: 6px; word-break: break-all;
+}
+
 /* ─── OTP / PIN Input ───────────────────────────────────── */
 .otp-input {
   text-align: center; font-size: 32px; font-weight: 800;
@@ -524,6 +551,36 @@ html, body, #root {
 }
 .pay-qr-label { font-size: 12px; color: #64748b; margin-bottom: 10px; font-weight: 500; }
 .polling-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+.btn-note { font-size: 13px; font-weight: 600; opacity: 0.85; }
+.pay-hint { font-size: 12px; font-weight: 600; color: #b45309; text-align: center; margin-top: -4px; }
+
+/* ─── Chuyển khoản VietQR (KioskScreen › PaymentScreen) ── */
+/* QR bên trái, số tiền + nội dung CK + đếm ngược bên phải: vừa khung 1024×600 không phải cuộn.
+   Đếm ngược dùng lại .qr-login-timer. */
+.vietqr-pay { display: flex; gap: 28px; align-items: flex-start; }
+.vietqr-code {
+  flex-shrink: 0; width: 260px; min-height: 260px; padding: 10px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: #fff; border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.vietqr-code img { display: block; width: 100%; max-height: 330px; object-fit: contain; }
+.vietqr-code.idle { background: var(--bg-card-hover); box-shadow: none; color: var(--text-muted); font-size: 13px; font-weight: 600; text-align: center; }
+.vietqr-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.vietqr-info h3 { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+.vietqr-field {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 14px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.vietqr-field span { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.vietqr-field strong { font-size: 22px; font-weight: 800; color: var(--accent); }
+.vietqr-field code {
+  font-family: monospace; font-size: 18px; font-weight: 700; letter-spacing: 1px;
+  color: var(--text-primary); word-break: break-all;
+}
+.vietqr-note { font-size: 13px; line-height: 1.45; color: var(--text-secondary); }
+.vietqr-info .polling-status, .vietqr-info .msg { margin-top: 0; }
+.vietqr-actions { display: flex; gap: 10px; }
 
 /* ─── Success Screen ────────────────────────────────────── */
 .success-hero { text-align: center; }

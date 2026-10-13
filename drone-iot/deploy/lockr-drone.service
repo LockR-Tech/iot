@@ -1,0 +1,26 @@
+# Bridge telemetry drone Lock.R — tự chạy khi Pi khởi động, tự chạy lại khi lỗi.
+# Cài:  sudo cp deploy/lockr-drone.service /etc/systemd/system/
+#       sudo systemctl daemon-reload && sudo systemctl enable --now lockr-drone
+# Đường dẫn dưới đây khớp với Pi `lockr-drone-01` (user lockr, code ở ~/lockr-drone).
+[Unit]
+Description=Lock.R drone telemetry bridge (MAVLink -> MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lockr
+Group=lockr
+# Quyền đọc cổng serial của autopilot.
+SupplementaryGroups=dialout
+WorkingDirectory=/home/lockr/lockr-drone
+ExecStart=/home/lockr/lockr-drone/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+# Bridge chỉ cần đọc cổng serial và ra mạng.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

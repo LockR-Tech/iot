@@ -139,6 +139,26 @@ class MQTTClientWrapper:
         else:
             logger.error(f"Publish failed to {topic}, rc={result.rc}")
 
+    def publish_and_wait(self, topic: str, payload: str, qos: int = 1, timeout: float = 5.0) -> bool:
+        """Publish rồi chờ broker xác nhận (QoS 1: PUBACK) tối đa `timeout` giây; True nếu đã tới broker.
+
+        Dùng khi tiến trình sắp tự thoát: tin còn nằm trong hàng đợi của paho sẽ mất theo tiến trình.
+        Không gọi trên luồng mạng của paho (callback on_message) — luồng đó phải rảnh mới nhận được PUBACK.
+        """
+        try:
+            info = self.client.publish(topic, payload, qos=qos)
+            info.wait_for_publish(timeout)
+            published = info.is_published()
+        except (RuntimeError, ValueError) as e:
+            # paho báo lỗi bằng exception khi chưa kết nối hoặc hàng đợi đầy
+            logger.error(f"Publish failed to {topic}: {e}")
+            return False
+        if published:
+            logger.info(f"📤 Published (confirmed) to [{topic}]: {payload}")
+        else:
+            logger.error(f"Publish to {topic} not confirmed by broker within {timeout}s")
+        return published
+
     @property
     def is_connected(self) -> bool:
         return self._connected
