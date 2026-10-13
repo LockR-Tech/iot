@@ -6,11 +6,11 @@ from pydantic import BaseModel
 from typing import Optional
 import uvicorn
 import threading
-import socket
 import os
 from pathlib import Path
 from utils.logger import get_logger
 from config.settings import settings
+from infracstructure.service_panel import ServicePanel, create_service_router, local_ip
 
 logger = get_logger("ConfigAPI")
 
@@ -21,7 +21,7 @@ class MQTTConfigUpdate(BaseModel):
     password: Optional[str] = None
     useTls: bool = True
 
-def create_config_app(db_manager, cabinet_state, hardware=None, lid=None):
+def create_config_app(db_manager, cabinet_state, hardware=None, lids=None):
     app = FastAPI(title="AISL IoT Config API")
     
     # Add CORS middleware
@@ -33,16 +33,9 @@ def create_config_app(db_manager, cabinet_state, hardware=None, lid=None):
         allow_headers=["*"],
     )
 
-    def _get_local_ip() -> str:
-        """Lấy IP address của máy."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return "0.0.0.0"
+    lids = lids or {}
+    lid = lids.get(1)   # /hardware/lid/* điều khiển trục 1; mọi trục ở /service
+    _get_local_ip = local_ip
 
     @app.get("/system/info")
     @app.get("/system/info/")
@@ -166,6 +159,7 @@ def create_config_app(db_manager, cabinet_state, hardware=None, lid=None):
             "connected": hardware.is_connected() if hardware is not None else False,
             "doors": doors,
             "lid": lid.status() if lid is not None else None,
+            "lids": {axis: l.status() for axis, l in lids.items()},
         }
 
     @app.post("/hardware/lid/{action}")
@@ -181,6 +175,12 @@ def create_config_app(db_manager, cabinet_state, hardware=None, lid=None):
         logger.warning(f"Lid {action} requested via local API")
         return actions[action]()
 
+    # ─── Bảng điều khiển kỹ thuật (/service) ───
+    from hardware.factory import save_lid_tuning
+    panel = ServicePanel(hardware, lids, cabinet_state, settings,
+                         save_tuning=lambda: save_lid_tuning(settings.LID_TUNING_FILE, lids))
+    app.include_router(create_service_router(panel))
+
     # ─── Static UI Dashboard ───
     _ui_dir = Path(__file__).parent.parent / "ui" / "dist"
     if _ui_dir.exists():
@@ -191,8 +191,8 @@ def create_config_app(db_manager, cabinet_state, hardware=None, lid=None):
 
     return app
 
-def start_config_api(db_manager, cabinet_state, port: int = 8000, hardware=None, lid=None):
-    app = create_config_app(db_manager, cabinet_state, hardware=hardware, lid=lid)
+def start_config_api(db_manager, cabinet_state, port: int = 8000, hardware=None, lids=None):
+    app = create_config_app(db_manager, cabinet_state, hardware=hardware, lids=lids)
     
     def run():
         logger.info(f"Starting Local Config API on port {port}")

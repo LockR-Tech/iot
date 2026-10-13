@@ -132,6 +132,10 @@ class GpioLockerManager:
         # Firmware: lệnh T và O cùng một xung relay, chỉ khác mục đích gọi.
         return self._pulse(slot_index, slave_id, "TEST")
 
+    def pulse_slot(self, slot_index: int, unlock_ms: int) -> dict:
+        """Mở ngăn với thời gian kích riêng — bảng điều khiển kỹ thuật."""
+        return self._pulse(slot_index, self.slave_id, "SERVICE", unlock_ms=unlock_ms)
+
     def close_slot(self, slot_index: int, slave_id: int = 1, timeout: int = 5) -> dict:
         error = self._validate(slot_index, slave_id)
         if error:
@@ -148,6 +152,12 @@ class GpioLockerManager:
     def door_states(self) -> List[bool]:
         """True = cửa đóng, theo thứ tự slot."""
         return list(self._door_closed)
+
+    def relay_states(self) -> List[bool]:
+        """True = relay đang kích, theo thứ tự slot."""
+        if self._group is None:
+            return [False] * self.num_slots
+        return [self._group.read(pin) == self.relay_active_high for pin in self.relay_pins]
 
     def close(self):
         self._stop.set()
@@ -173,16 +183,17 @@ class GpioLockerManager:
             return {"slave": slave_id, "slot": slot_index, "result": "FAIL", "error": "INVALID_SLOT"}
         return None
 
-    def _pulse(self, slot_index: int, slave_id: int, label: str) -> dict:
+    def _pulse(self, slot_index: int, slave_id: int, label: str, unlock_ms: Optional[int] = None) -> dict:
         error = self._validate(slot_index, slave_id)
         if error:
             return error
+        unlock_ms = self.unlock_ms if unlock_ms is None else unlock_ms
         start = time.monotonic()
         with self._op_lock:
-            logger.info(f"{label} slot {slot_index}: relay GPIO{self.relay_pins[slot_index]} ON {self.unlock_ms} ms")
+            logger.info(f"{label} slot {slot_index}: relay GPIO{self.relay_pins[slot_index]} ON {unlock_ms} ms")
             try:
                 self._set_relay(slot_index, True)
-                time.sleep(self.unlock_ms / 1000)
+                time.sleep(unlock_ms / 1000)
             finally:
                 # Luôn ngắt cuộn khoá, kể cả khi có lỗi giữa chừng.
                 self._set_relay(slot_index, False)

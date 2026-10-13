@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bảng điều khiển tủ</title>
+<style>
+/* Bảng điều khiển kỹ thuật: thanh trạng thái + 4 tab; số liệu làm mới mỗi giây từ /service/api/overview. */
+:root {
+  --bg: #eef1f3; --surface: #ffffff; --raise: #f6f8f9; --ink: #16202a; --muted: #5b6b78; --line: #d3dbe0;
+  --accent: #0d6b8c; --accent-ink: #fff; --danger: #c0281e; --danger-bg: #fdecea; --ok: #1c7c3d; --ok-bg: #e4f4e9;
+  --warn: #8a5800; --warn-bg: #fff3d1;
+  --k-relay: #e0700c; --k-door: #2a9a4b; --k-lid1: #2b78d0; --k-lid2: #7a4fd0; --k-3v3: #b88d00; --k-5v: #d5302a; --k-gnd: #5f6b76; --k-free: #dfe5e9;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font: system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10161b; --surface: #182129; --raise: #1e2933; --ink: #e4eaee; --muted: #98a8b4; --line: #2c3a45;
+    --accent: #4fb8d8; --accent-ink: #08161c; --danger: #ff7d72; --danger-bg: #3a1a18; --ok: #72d391; --ok-bg: #15301f;
+    --warn: #f0c24a; --warn-bg: #362c10;
+    --k-relay: #ff9333; --k-door: #46c46c; --k-lid1: #5aa2f0; --k-lid2: #a98bff; --k-3v3: #e2b83a; --k-5v: #ff6259; --k-gnd: #9aa7b3; --k-free: #26323c;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 1px solid var(--line); background: var(--raise); border-radius: 6px; padding: 7px 12px; font-weight: 600; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+input[type=number], select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; }
+code, .mono { font-family: var(--mono); font-size: .92em; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+header.bar { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.bar-in { max-width: 1200px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.bar h1 { font-size: 18px; margin: 0; }
+.facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); min-width: 0; }
+.facts span { overflow-wrap: anywhere; }
+.facts b { color: var(--ink); font-weight: 600; }
+.bar .spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; background: var(--raise); border: 1px solid var(--line); white-space: nowrap; }
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill.ok { background: var(--ok-bg); color: var(--ok); border-color: transparent; } .pill.ok i { background: var(--ok); }
+.pill.bad { background: var(--danger-bg); color: var(--danger); border-color: transparent; } .pill.bad i { background: var(--danger); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; } .pill.warn i { background: var(--warn); }
+.pill.run { background: var(--accent); color: var(--accent-ink); border-color: transparent; } .pill.run i { background: var(--accent-ink); }
+
+nav.tabs { max-width: 1200px; margin: 0 auto; padding: 0 16px; display: flex; gap: 4px; overflow-x: auto; }
+nav.tabs button { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: 10px 12px; color: var(--muted); white-space: nowrap; }
+nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--accent); }
+
+main { max-width: 1200px; margin: 0 auto; padding: 16px 16px 80px; display: flex; flex-direction: column; gap: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.panel h2 { font-size: 16px; margin: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.note { font-size: 13.5px; padding: 8px 12px; border-left: 4px solid var(--warn); background: var(--warn-bg); border-radius: 0 6px 6px 0; }
+.note.err { border-color: var(--danger); background: var(--danger-bg); }
+
+/* Ô tủ */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: var(--surface); }
+.seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); }
+input.ms-input { width: 110px; }
+.cab { display: grid; gap: 10px; }
+.box { background: var(--raise); border: 2px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.box.nolock { background: repeating-linear-gradient(135deg, var(--raise) 0 8px, transparent 8px 16px); border-style: dashed; color: var(--muted); justify-content: center; align-items: center; font-size: 13px; text-align: center; }
+.box.busy { border-color: var(--accent); }
+.box.on { border-color: var(--k-relay); box-shadow: 0 0 0 3px color-mix(in srgb, var(--k-relay) 30%, transparent); }
+.box .top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.box .num { font-size: 22px; font-weight: 800; }
+.tag { font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; background: var(--line); color: var(--muted); }
+.box dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; font-size: 12.5px; }
+.box dt { color: var(--muted); } .box dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.box button { margin-top: auto; }
+
+/* Trục */
+.axes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 16px; }
+.lamps { display: flex; gap: 10px; flex-wrap: wrap; }
+.lamp { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px; }
+.lamp i { width: 14px; height: 14px; border-radius: 50%; background: var(--k-free); border: 2px solid var(--line); }
+.lamp.hit i { background: var(--ok); border-color: var(--ok); }
+.meter { height: 8px; background: var(--raise); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }
+.meter > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px 14px; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+label.f span.hint { font-size: 12px; }
+label.c { display: flex; gap: 8px; align-items: center; font-size: 13.5px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.big { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13.5px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { padding: 3px 10px; font-size: 13px; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
+
+/* Header 40 chân */
+.hdr { display: grid; grid-template-columns: minmax(0, 1fr) 40px 40px minmax(0, 1fr); gap: 3px 8px; align-items: center; max-width: 760px; }
+.hdr .p { height: 30px; border-radius: 5px; display: grid; place-items: center; font: 700 12px var(--mono); color: #fff; background: var(--k-free); }
+.hdr .p.free { color: var(--muted); }
+.hdr .p.unused { opacity: .5; }
+.hdr .l { font-size: 12.5px; line-height: 1.25; overflow-wrap: anywhere; }
+.hdr .l.left { text-align: right; }
+.hdr .l .g { font-family: var(--mono); color: var(--muted); }
+.hdr .head { font-size: 12px; color: var(--muted); text-align: center; grid-column: 1 / -1; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+td.mono { white-space: nowrap; }
+
+/* Nhật ký + thông báo */
+.log li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.log ul { list-style: none; margin: 0; padding: 0; }
+.log time { font-family: var(--mono); color: var(--muted); }
+#toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; z-index: 10; width: min(520px, calc(100% - 32px)); }
+.toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; font-size: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.toast.err { background: var(--danger); color: #fff; }
+.k-relay { background: var(--k-relay) !important; } .k-door { background: var(--k-door) !important; }
+.k-lid1 { background: var(--k-lid1) !important; } .k-lid2 { background: var(--k-lid2) !important; }
+.k-3v3 { background: var(--k-3v3) !important; } .k-5v { background: var(--k-5v) !important; } .k-gnd { background: var(--k-gnd) !important; }
+@media (prefers-reduced-motion: reduce) { .meter > div { transition: none; } }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="bar-in">
+    <h1>Bảng điều khiển tủ</h1>
+    <div class="facts" id="facts"><span>Đang kết nối…</span></div>
+    <span class="spacer"></span>
+    <span class="pill" id="conn"><i></i>…</span>
+    <button class="danger" type="button" id="stopAll" title="Dừng mọi trục đang quay">■ Dừng tất cả trục</button>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Mục">
+    <button role="tab" type="button" data-tab="boxes">Ô tủ</button>
+    <button role="tab" type="button" data-tab="axes">Trục quay</button>
+    <button role="tab" type="button" data-tab="pins">Sơ đồ chân</button>
+    <button role="tab" type="button" data-tab="log">Nhật ký</button>
+  </nav>
+</header>
+
+<main>
+  <div class="note err" id="fatal" hidden></div>
+
+  <!-- Ô tủ -->
+  <section data-pane="boxes" class="panel">
+    <div class="row" style="justify-content:space-between">
+      <h2>Mở ô</h2>
+      <div class="row">
+        <span class="small muted">Thời gian kích relay</span>
+        <div class="seg" id="msSeg">
+          <button type="button" data-ms="1000">1 s</button>
+          <button type="button" data-ms="3000">3 s</button>
+          <button type="button" data-ms="5000">5 s</button>
+        </div>
+        <input class="ms-input" type="number" id="msInput" min="100" max="10000" step="100" aria-label="Thời gian kích (ms)">
+        <span class="small muted">ms</span>
+      </div>
+    </div>
+    <div class="cab" id="cab"></div>
+    <div class="row">
+      <button type="button" id="openAll">Mở lần lượt tất cả ô</button>
+      <span id="openAllConfirm" hidden class="row">
+        <span class="small">Mở <b id="openAllCount"></b> ô, mỗi ô cách nhau 3 giây?</span>
+        <button type="button" class="primary" id="openAllYes">Mở</button>
+        <button type="button" id="openAllNo">Huỷ</button>
+      </span>
+    </div>
+    <p class="small muted" id="boxNote">Vị trí ô lấy theo sơ đồ trên máy chủ. Cảm biến cửa chưa nối đúng thì trạng thái "Cửa" có thể sai — nhìn tủ để xác nhận.</p>
+  </section>
+
+  <!-- Trục -->
+  <section data-pane="axes" class="axes" id="axes"></section>
+
+  <!-- Chân -->
+  <section data-pane="pins" class="panel">
+    <h2>Header 40 chân của Pi</h2>
+    <p class="small muted">Chân GPIO theo cấu hình đang chạy trên Pi (<code>.env</code>). Dây 3,3 V, 5 V, GND ghi theo hướng dẫn nối dây tủ TU01. Đầu có chân 1, 2 là đầu xa cổng USB.</p>
+    <div class="legend">
+      <span><i class="k-relay"></i>relay khoá</span><span><i class="k-door"></i>cảm biến cửa</span>
+      <span><i class="k-lid1"></i>trục 1</span><span><i class="k-lid2"></i>trục 2</span>
+      <span><i class="k-3v3"></i>3,3 V</span><span><i class="k-5v"></i>5 V</span><span><i class="k-gnd"></i>GND</span>
+    </div>
+    <div class="hdr" id="hdr"></div>
+    <h2>Từng ô</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Ô</th><th>Relay</th><th>GPIO relay</th><th>Chân Pi</th><th>GPIO cảm biến</th><th>Chân Pi</th></tr></thead>
+      <tbody id="boxPins"></tbody>
+    </table></div>
+  </section>
+
+  <!-- Nhật ký -->
+  <section data-pane="log" class="panel log">
+    <h2>Thao tác gần đây</h2>
+    <p class="small muted">Các lệnh gửi từ bảng này kể từ lần khởi động dịch vụ gần nhất.</p>
+    <ul id="logList"></ul>
+  </section>
+</main>
+<div id="toasts" aria-live="polite"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+let data = null, layout = null, openMs = store.get('panel-ms', 3000), busyBoxes = new Set();
+const dirty = {};            // trục nào đang sửa form tốc độ thì không ghi đè
+
+async function api(path, opts = {}) {
+  const res = await fetch('/service/api' + path, {
+    method: opts.method || 'GET',
+    headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) throw new Error((body && body.detail) || `Lỗi ${res.status}`);
+  return body;
+}
+function toast(msg, err) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (err ? ' err' : '');
+  el.textContent = msg;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), err ? 6000 : 3500);
+}
+
+/* ─── tab ─── */
+function showTab(name) {
+  document.querySelectorAll('nav.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === name));
+  document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== name);
+  store.set('panel-tab', name);
+}
+document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+const TABS = ['boxes', 'axes', 'pins', 'log'];
+showTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : store.get('panel-tab', 'boxes'));
+
+/* ─── thanh trên ─── */
+function renderBar() {
+  const s = data.system, cab = s.cabinet;
+  $('#facts').innerHTML = [
+    cab ? `Tủ <b>${esc(cab.name || cab.code || '')}</b> (id ${esc(cab.id)})` : '<b>Pi chưa gán vào tủ</b>',
+    `IP <b>${esc(s.ipAddress)}</b>`, `MAC <b class="mono">${esc(s.macAddress)}</b>`, `Phần mềm <b>${esc(s.firmware)}</b>`,
+  ].map(x => `<span>${x}</span>`).join('');
+  const c = $('#conn');
+  c.className = 'pill ' + (s.connected ? 'ok' : 'bad');
+  c.innerHTML = `<i></i>${s.connected ? 'GPIO sẵn sàng' : 'Mất phần cứng'} · ${esc(s.backend || '—')}`;
+}
+
+/* ─── ô tủ ─── */
+function setMs(ms) {
+  openMs = Math.max(100, Math.min(10000, Math.round(+ms || 3000)));
+  store.set('panel-ms', openMs);
+  $('#msInput').value = openMs;
+  document.querySelectorAll('#msSeg button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.ms === openMs));
+}
+document.querySelectorAll('#msSeg button').forEach(b => b.addEventListener('click', () => setMs(b.dataset.ms)));
+$('#msInput').addEventListener('change', e => setMs(e.target.value));
+setMs(openMs);
+
+function boxCard(b, cell) {
+  if (!b) return `<div class="box nolock">không có khoá</div>`;
+  const door = b.doorClosed === null ? '—' : b.doorClosed ? 'Đóng' : 'Mở';
+  const tags = [cell && cell.cellType && cell.cellType !== 'STANDARD' ? cell.cellType : '', cell && cell.status ? cell.status : ''].filter(Boolean);
+  const cls = ['box', b.relayOn ? 'on' : '', busyBoxes.has(b.box) ? 'busy' : ''].join(' ');
+  return `<div class="${cls}" data-box="${b.box}">
+    <div class="top"><span class="num">Ô ${b.box}</span><span class="row">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</span></div>
+    <dl>
+      <dt>Relay</dt><dd>${b.relayChannel} · GPIO${b.relayGpio ?? '?'} · chân ${b.relayPin ?? '?'}</dd>
+      <dt>Cửa</dt><dd>${door} · GPIO${b.doorGpio ?? '?'} · chân ${b.doorPin ?? '?'}</dd>
+    </dl>
+    <button type="button" class="primary" data-open="${b.box}" ${busyBoxes.has(b.box) ? 'disabled' : ''}>${busyBoxes.has(b.box) ? 'Đang kích…' : b.relayOn ? 'Relay đang kích' : `Mở ô ${b.box}`}</button>
+  </div>`;
+}
+function renderBoxes() {
+  const boxes = data.boxes, byNum = new Map(boxes.map(b => [b.box, b]));
+  const cells = layout && layout.cells && layout.cells.length ? layout.cells : null;
+  const cab = $('#cab');
+  if (!cells) {
+    cab.style.gridTemplateColumns = 'repeat(auto-fill, minmax(min(190px, 100%), 1fr))';
+    cab.innerHTML = boxes.map(b => boxCard(b, null)).join('');
+  } else {
+    const rows = Math.max(...cells.map(c => (c.rowIndex || 1) + (isTall(c) ? 1 : 0)));
+    const cols = Math.max(...cells.map(c => (c.colIndex || 0) + 1));
+    const taken = new Set();
+    let html = '';
+    cells.forEach(c => {
+      const r = c.rowIndex || 1, col = (c.colIndex || 0) + 1, span = isTall(c) ? 2 : 1;
+      for (let i = 0; i < span; i++) taken.add(`${r + i}:${col}`);
+      html += `<div style="grid-row:${r} / span ${span};grid-column:${col};display:grid">${boxCard(byNum.get(c.boxNumber), c)}</div>`;
+    });
+    for (let r = 1; r <= rows; r++) for (let col = 1; col <= cols; col++)
+      if (!taken.has(`${r}:${col}`)) html += `<div style="grid-row:${r};grid-column:${col};display:grid">${boxCard(null)}</div>`;
+    cab.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    cab.innerHTML = html;
+  }
+  $('#boxNote').hidden = false;
+  cab.querySelectorAll('[data-open]').forEach(btn => btn.addEventListener('click', () => openBox(+btn.dataset.open)));
+  $('#boxPins').innerHTML = boxes.map(b => `<tr><td><b>Ô ${b.box}</b></td><td>${b.relayChannel}</td><td class="mono">GPIO${b.relayGpio ?? '?'}</td><td class="mono">${b.relayPin ?? '?'}</td><td class="mono">GPIO${b.doorGpio ?? '?'}</td><td class="mono">${b.doorPin ?? '?'}</td></tr>`).join('');
+}
+const isTall = c => c.cellType === 'XL' || c.size === 'XL';
+
+async function openBox(box) {
+  if (busyBoxes.has(box)) return;
+  busyBoxes.add(box); renderBoxes();
+  try {
+    const r = await api(`/boxes/${box}/open`, { method: 'POST', body: { ms: openMs } });
+    if (r.result === 'OK') toast(`Đã kích ô ${box} ${openMs / 1000} s${r.door === false ? ' · cảm biến báo cửa mở' : ''}`);
+    else toast(`Ô ${box}: ${r.error || r.result}`, true);
+  } catch (e) { toast(`Ô ${box}: ${e.message}`, true); }
+  busyBoxes.delete(box);
+  refresh();
+}
+$('#openAll').addEventListener('click', () => {
+  $('#openAllCount').textContent = data ? data.boxes.length : 0;
+  $('#openAllConfirm').hidden = false; $('#openAll').hidden = true;
+});
+$('#openAllNo').addEventListener('click', () => { $('#openAllConfirm').hidden = true; $('#openAll').hidden = false; });
+$('#openAllYes').addEventListener('click', async () => {
+  $('#openAllConfirm').hidden = true; $('#openAll').hidden = false;
+  for (const b of data.boxes) { await openBox(b.box); await new Promise(r => setTimeout(r, 3000)); }
+});
+
+/* ─── trục ─── */
+const STATE = { UNKNOWN: ['Chưa rõ vị trí', 'warn'], CLOSED: ['Đã đóng (chạm gốc)', 'ok'], OPEN: ['Đã mở (chạm cuối)', 'ok'],
+                MOVING: ['Đang chạy', 'run'], STOPPED: ['Dừng giữa đường', ''], FAULT: ['Lỗi: không chạm công tắc', 'bad'] };
+const fmt = (n, d = 2) => n === null || n === undefined ? '—' : (+n).toLocaleString('vi-VN', { maximumFractionDigits: d });
+
+function axisCard(a) {
+  const pinRows = Object.entries({ pul: 'PUL−', dir: 'DIR−', home: 'Công tắc gốc', end: 'Công tắc cuối' })
+    .map(([k, n]) => `<tr><td>${n}</td><td class="mono">GPIO${a.pins[k].gpio}</td><td class="mono">chân ${a.pins[k].pin ?? '?'}</td></tr>`).join('');
+  if (!a.enabled) return `<div class="panel" data-axis="${a.axis}">
+      <div class="row" style="justify-content:space-between"><h2>Trục ${a.axis}</h2><span class="pill"><i></i>Chưa bật</span></div>
+      <p class="small">Phần mềm chưa điều khiển trục này. Nối dây xong thì đặt <code>${a.envFlag}=true</code> trong <code>.env</code> trên Pi rồi khởi động lại dịch vụ <code>lockr-controller</code>.</p>
+      <div class="tablewrap"><table><thead><tr><th>Dây</th><th>GPIO</th><th>Chân Pi</th></tr></thead><tbody>${pinRows}</tbody></table></div>
+    </div>`;
+  return `<div class="panel" data-axis="${a.axis}">
+    <div class="row" style="justify-content:space-between"><h2>Trục ${a.axis}</h2><span class="pill" data-k="state"><i></i></span></div>
+    <div class="lamps"><span class="lamp" data-k="home"><i></i>Công tắc gốc</span><span class="lamp" data-k="end"><i></i>Công tắc cuối</span></div>
+    <dl class="kv">
+      <dt>Vị trí</dt><dd data-k="pos"></dd>
+      <dt>Hành trình</dt><dd data-k="travel"></dd>
+      <dt>Lần chạy trước</dt><dd data-k="last"></dd>
+    </dl>
+    <div data-k="progressWrap" hidden><div class="meter"><div data-k="progress"></div></div><span class="small muted" data-k="progressText"></span></div>
+    <div class="row">
+      <button type="button" data-cmd="home">Về gốc</button>
+      <button type="button" data-cmd="close">Đóng hết</button>
+      <button type="button" data-cmd="open">Mở hết</button>
+      <button type="button" class="danger" data-cmd="stop">Dừng</button>
+    </div>
+    <hr>
+    <h2>Chạy số vòng</h2>
+    <div class="row">
+      <label class="f" style="width:120px">Số vòng<input type="number" data-k="revs" min="0.05" step="0.25" value="${store.get('panel-revs-' + a.axis, 1)}"></label>
+      <div class="chips">${[0.25, 1, 3, 5, 10].map(v => `<button type="button" data-revs="${v}">${fmt(v)}</button>`).join('')}</div>
+    </div>
+    <div class="row">
+      <button type="button" data-jog="close">◀ Về phía đóng</button>
+      <button type="button" data-jog="open">Về phía mở ▶</button>
+    </div>
+    <p class="small muted">Chạy đủ số vòng thì dừng; chạm công tắc ở phía đang chạy thì dừng sớm.</p>
+    <hr>
+    <h2>Tốc độ và xung</h2>
+    <div>
+      <div class="row" style="justify-content:space-between"><span class="small muted">Tốc độ chạy</span><span><span class="big" data-k="rpsBig"></span> vòng/giây</span></div>
+      <input type="range" data-f="rps" min="0.05" max="3" step="0.05" aria-label="Tốc độ (vòng/giây)">
+      <span class="small muted" data-k="rpsHint"></span>
+    </div>
+    <div class="grid2">
+      <label class="f">Tốc độ (vòng/giây)<input type="number" data-f="rps" min="0.05" max="5" step="0.05"></label>
+      <label class="f">Khởi động (vòng/giây)<input type="number" data-f="start_rps" min="0.05" max="5" step="0.05"><span class="hint">tăng dần từ đây lên tốc độ chạy</span></label>
+      <label class="f">Số bước tăng tốc<input type="number" data-f="ramp_steps" min="0" max="20000" step="50"></label>
+      <label class="f">Độ rộng xung (µs)<input type="number" data-f="pulse_us" min="2" max="5000" step="10"><span class="hint" data-k="pulseHint"></span></label>
+      <label class="f">Bước mỗi vòng (DIP TB6600)<select data-f="steps_per_rev">${[200, 400, 800, 1600, 3200, 6400].map(v => `<option value="${v}">${v}</option>`).join('')}</select></label>
+      <label class="f">Tối đa vòng mỗi lần<input type="number" data-f="max_revs" min="0.5" max="500" step="0.5"><span class="hint">chặn chạy mãi khi hỏng công tắc</span></label>
+    </div>
+    <label class="c"><input type="checkbox" data-f="open_dir_high"> Chiều mở = DIR mức cao (bỏ chọn nếu nắp chạy ngược)</label>
+    <label class="c"><input type="checkbox" data-f="limit_active_low"> Công tắc báo mức thấp khi bị bấm</label>
+    <div class="row"><button type="button" class="primary" data-k="save">Lưu thông số</button><button type="button" data-k="reset">Bỏ thay đổi</button><span class="small muted" data-k="saveHint"></span></div>
+    <div class="tablewrap"><table><thead><tr><th>Dây</th><th>GPIO</th><th>Chân Pi</th></tr></thead><tbody>${pinRows}</tbody></table></div>
+  </div>`;
+}
+
+function renderAxes() {
+  const wrap = $('#axes');
+  data.lids.forEach(a => {
+    let card = wrap.querySelector(`[data-axis="${a.axis}"]`);
+    const enabledNow = card ? card.querySelector('[data-cmd]') !== null : null;
+    if (!card || enabledNow !== a.enabled) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = axisCard(a);
+      const fresh = tmp.firstElementChild;
+      card ? card.replaceWith(fresh) : wrap.appendChild(fresh);
+      card = fresh;
+      if (a.enabled) bindAxis(card, a.axis);
+      dirty[a.axis] = false;
+    }
+    if (a.enabled) updateAxis(card, a);
+  });
+}
+function q(card, k) { return card.querySelector(`[data-k="${k}"]`); }
+function updateAxis(card, a) {
+  const st = a.status, [label, cls] = STATE[st.state] || [st.state, ''];
+  const pill = q(card, 'state'); pill.className = 'pill ' + cls; pill.innerHTML = `<i></i>${label}`;
+  q(card, 'home').classList.toggle('hit', !!st.homeLimit);
+  q(card, 'end').classList.toggle('hit', !!st.endLimit);
+  q(card, 'pos').textContent = st.positionRevs === null ? 'chưa biết — bấm "Về gốc" một lần' : `cách gốc ${fmt(st.positionRevs)} vòng`;
+  q(card, 'travel').textContent = st.travelRevs === null ? 'chưa đo (chạy từ gốc tới cuối một lần)' : `${fmt(st.travelRevs)} vòng gốc → cuối`;
+  const lr = st.lastResult;
+  q(card, 'last').textContent = lr ? `${lr.action || ''} · ${lr.result}${lr.error ? ' ' + lr.error : ''} · ${fmt(lr.revolutions)} vòng` : '—';
+  const pw = q(card, 'progressWrap');
+  pw.hidden = !st.busy;
+  if (st.busy) {
+    const spr = st.config.steps_per_rev, done = st.progressSteps / spr;
+    const total = st.targetSteps ? st.targetSteps / spr : null;
+    q(card, 'progress').style.width = total ? `${Math.min(100, 100 * done / total)}%` : '100%';
+    q(card, 'progressText').textContent = total ? `${fmt(done)} / ${fmt(total)} vòng` : `${fmt(done)} vòng · chạy tới công tắc`;
+  }
+  card.querySelectorAll('[data-cmd]:not([data-cmd=stop]), [data-jog], [data-k=save]').forEach(b => b.disabled = st.busy);
+  q(card, 'saveHint').textContent = st.busy ? 'Dừng trục trước khi lưu.' : '';
+  if (!dirty[a.axis]) fillForm(card, st.config);
+  hints(card, st);
+}
+function fillForm(card, cfg) {
+  card.querySelectorAll('[data-f]').forEach(el => {
+    const v = cfg[el.dataset.f];
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+  });
+}
+function formValues(card) {
+  const out = {};
+  card.querySelectorAll('[data-f]').forEach(el => { out[el.dataset.f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  return out;
+}
+function hints(card, st) {
+  const v = formValues(card), sps = Math.round(v.rps * v.steps_per_rev);
+  q(card, 'rpsBig').textContent = fmt(v.rps);
+  q(card, 'rpsHint').textContent = `= ${sps.toLocaleString('vi-VN')} bước/giây · ${fmt(v.rps * 60, 0)} vòng/phút`;
+  const interval = 1e6 / Math.max(sps, 1), eff = Math.min(v.pulse_us, interval / 2);
+  q(card, 'pulseHint').textContent = eff < v.pulse_us ? `ở tốc độ này xung thật ${fmt(eff, 0)} µs (≤ nửa chu kỳ)` : 'xung dài giúp opto TB6600 nhận ở 3,3 V';
+}
+function bindAxis(card, axis) {
+  card.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', async () => {
+    try { const r = await api(`/lids/${axis}/${b.dataset.cmd}`, { method: 'POST' }); if (r.result === 'FAIL') toast(`Trục ${axis}: ${r.error}`, true); }
+    catch (e) { toast(`Trục ${axis}: ${e.message}`, true); }
+    refresh();
+  }));
+  const revs = q(card, 'revs');
+  card.querySelectorAll('[data-revs]').forEach(b => b.addEventListener('click', () => { revs.value = b.dataset.revs; store.set('panel-revs-' + axis, +revs.value); }));
+  revs.addEventListener('change', () => store.set('panel-revs-' + axis, +revs.value));
+  card.querySelectorAll('[data-jog]').forEach(b => b.addEventListener('click', async () => {
+    try {
+      const r = await api(`/lids/${axis}/jog`, { method: 'POST', body: { revolutions: +revs.value, direction: b.dataset.jog } });
+      if (r.result === 'FAIL') toast(`Trục ${axis}: ${r.error}`, true);
+    } catch (e) { toast(`Trục ${axis}: ${e.message}`, true); }
+    refresh();
+  }));
+  // hai ô "rps" (thanh trượt + số) đi cùng nhau
+  const rpsInputs = card.querySelectorAll('[data-f=rps]');
+  card.querySelectorAll('[data-f]').forEach(el => el.addEventListener('input', () => {
+    dirty[axis] = true;
+    if (el.dataset.f === 'rps') rpsInputs.forEach(o => { if (o !== el) o.value = el.value; });
+    hints(card, null);
+  }));
+  q(card, 'reset').addEventListener('click', () => { dirty[axis] = false; refresh(); });
+  q(card, 'save').addEventListener('click', async () => {
+    const v = formValues(card);
+    try {
+      const cfg = await api(`/lids/${axis}/tuning`, { method: 'PUT', body: v });
+      dirty[axis] = false; fillForm(card, cfg);
+      toast(`Đã lưu trục ${axis}: ${fmt(cfg.rps)} vòng/giây, xung ${cfg.pulse_us} µs`);
+    } catch (e) { toast(`Trục ${axis}: ${e.message}`, true); }
+  });
+}
+$('#stopAll').addEventListener('click', async () => {
+  try { await api('/stop-all', { method: 'POST' }); toast('Đã gửi lệnh dừng mọi trục'); } catch (e) { toast(e.message, true); }
+  refresh();
+});
+
+/* ─── header 40 chân ─── */
+function renderHeader() {
+  const H = data.header, byPin = new Map(H.map(p => [p.pin, p]));
+  let html = '<div class="head">▲ đầu xa cổng USB · cột trái chân lẻ (phía quạt), cột phải chân chẵn (mép bo)</div>';
+  for (let r = 0; r < 20; r++) {
+    const a = byPin.get(2 * r + 1), b = byPin.get(2 * r + 2);
+    const lab = (p, side) => `<div class="l ${side}">${p.label ? esc(p.label) : ''}${p.gpio !== null && p.gpio !== undefined ? ` <span class="g">GPIO${p.gpio}</span>` : ''}</div>`;
+    const pin = p => `<div class="p ${p.kind === 'free' ? 'free' : 'k-' + p.kind} ${p.used ? '' : 'unused'}" title="${esc(p.label || p.kind)}">${p.pin}</div>`;
+    html += lab(a, 'left') + pin(a) + pin(b) + lab(b, 'right');
+  }
+  $('#hdr').innerHTML = html;
+}
+
+/* ─── nhật ký ─── */
+function renderLog() {
+  const list = data.actions;
+  $('#logList').innerHTML = list.length ? list.map(x => `<li><time>${esc(x.at)}</time><span>${esc(x.what)} — <b>${esc(x.result || '')}</b></span></li>`).join('')
+    : '<li class="muted">Chưa có thao tác nào.</li>';
+}
+
+/* ─── làm mới: chỉ vẽ lại phần có số liệu đổi, để không mất focus khi đang gõ ─── */
+const last = {};
+function changed(key, value) {
+  const s = JSON.stringify(value);
+  if (last[key] === s) return false;
+  last[key] = s; return true;
+}
+let refreshing = false;
+async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    data = await api('/overview');
+    $('#fatal').hidden = true;
+    if (changed('bar', data.system)) renderBar();
+    if (changed('boxes', [data.boxes, layout, [...busyBoxes]])) renderBoxes();
+    renderAxes();
+    if (changed('header', data.header)) renderHeader();
+    if (changed('log', data.actions)) renderLog();
+  } catch (e) {
+    $('#fatal').hidden = false;
+    $('#fatal').textContent = `Không đọc được trạng thái tủ: ${e.message}`;
+  } finally { refreshing = false; }
+}
+async function loadLayout() {
+  try { layout = await api('/layout'); if (layout.error) toast(layout.error + ' — hiện ô theo thứ tự.', true); }
+  catch (e) { layout = null; }
+  if (data) renderBoxes();
+}
+refresh();
+loadLayout();
+setInterval(() => { if (!document.hidden) refresh(); }, 1000);
+setInterval(loadLayout, 60000);
+</script>
+</body>
+</html>

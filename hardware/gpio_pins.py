@@ -17,6 +17,16 @@ from utils.logger import get_logger
 
 logger = get_logger("GPIO")
 
+# BCM → số chân vật lý trên header 40 chân.
+HEADER_PIN = {
+    0: 27, 1: 28, 2: 3, 3: 5, 4: 7, 5: 29, 6: 31, 7: 26, 8: 24, 9: 21, 10: 19, 11: 23, 12: 32,
+    13: 33, 14: 8, 15: 10, 16: 36, 17: 11, 18: 12, 19: 35, 20: 38, 21: 40, 22: 15, 23: 16,
+    24: 18, 25: 22, 26: 37, 27: 13,
+}
+# Chân nguồn của header (không phải GPIO).
+POWER_PINS = {1: "3V3", 17: "3V3", 2: "5V", 4: "5V",
+              6: "GND", 9: "GND", 14: "GND", 20: "GND", 25: "GND", 30: "GND", 34: "GND", 39: "GND"}
+
 # Nhãn chip điều khiển header 40 chân trên từng đời Pi.
 _HEADER_CHIP_LABELS = ("pinctrl-rp1", "pinctrl-bcm2711", "pinctrl-bcm2835")
 

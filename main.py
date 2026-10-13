@@ -71,11 +71,11 @@ def main():
     # HARDWARE_BACKEND=gpio: relay + cảm biến nối thẳng GPIO của Pi; mặc định rs485 (Arduino).
     # Hai loại có cùng giao diện nên các service bên dưới không phân biệt.
     simulation = os.getenv("SIMULATION", "false").lower() == "true"
-    lid_controller = None
+    lids = {}   # {số trục: LidController}
     if settings.HARDWARE_BACKEND == "gpio" and not simulation:
         from hardware.factory import create_gpio_hardware
-        serial_manager, lid_controller = create_gpio_hardware(settings)
-        logger.info(f"[3/7] GPIO hardware initialized (lid: {'on' if lid_controller else 'off'})")
+        serial_manager, lids = create_gpio_hardware(settings)
+        logger.info(f"[3/7] GPIO hardware initialized (lid axes: {sorted(lids) or 'off'})")
     else:
         serial_manager = SerialManager(
             port=settings.SERIAL_PORT,
@@ -112,7 +112,7 @@ def main():
     # 4.2 Chạy Config API server (Local)
     from infracstructure.config_api import start_config_api
     start_config_api(db_manager, cabinet_state, port=8000,
-                     hardware=serial_manager, lid=lid_controller)
+                     hardware=serial_manager, lids=lids)
     logger.info("[4.2/7] Local Config API started on port 8000")
 
     # 6. Khởi tạo MQTT Client & Heartbeat (chưa connect)
@@ -177,8 +177,8 @@ def main():
         ble_service.stop()
         heartbeat_service.stop()
         locker_service.shutdown()
-        if lid_controller:
-            lid_controller.shutdown()
+        for lid in lids.values():
+            lid.shutdown()
         serial_manager.close()
         mqtt_wrapper.stop()
         if _exit_code:
