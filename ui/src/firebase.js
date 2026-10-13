@@ -11,9 +11,11 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// Chưa có Firebase *Web app* trong project laundry-locker-19a9d (repo mới chỉ có cấu hình
-// Android + iOS, xem mobile/lib/firebase_options.dart) nên VITE_FIREBASE_API_KEY có thể để
-// trống. initializeApp/getAuth ném lỗi ngay khi thiếu apiKey — nếu để lỗi đó văng ra scope
+// Cấu hình lấy từ Web app "LockR Web" của project lockr-drone-delivery (cùng project với app
+// mobile và khoá FIREBASE_CREDENTIALS_JSON của backend), đặt trong ui/.env(.local) — giá trị công
+// khai, xem docs 04-engineering/cau-hinh-dich-vu-ngoai.md. Kiosk mở ở http://127.0.0.1:3002 nên
+// 127.0.0.1 phải nằm trong Authorized domains của Firebase Auth.
+// Máy chưa đặt VITE_FIREBASE_API_KEY thì initializeApp/getAuth ném lỗi ngay — nếu để lỗi đó văng ra scope
 // module thì cả kiosk trắng trang, kể cả 2 luồng không hề cần Firebase (mã nhân viên, OTP
 // email). Bắt lỗi ở đây; chỉ báo lỗi rõ ràng khi người dùng thật sự bấm "Số điện thoại".
 let auth = null;
