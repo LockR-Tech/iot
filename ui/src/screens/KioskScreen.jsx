@@ -995,9 +995,47 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
 
-  // Tính giá thuê: STANDARD = 5000đ/giờ (theo backend config)
-  const HOURLY_RATE = 5000;
+  // Giá thuê và số giờ gợi ý do admin cấu hình (scope order, công khai). Chỉ để hiển thị:
+  // backend luôn tự tính tiền. API lỗi ⇒ giữ mặc định của catalog.
+  const [rates, setRates] = useState({ standard: 5000, xl: 10000 });
+  const [hoursOptions, setHoursOptions] = useState([1, 2, 3, 4, 6, 8, 12, 24]);
+  useEffect(() => {
+    let alive = true;
+    api.getPublicSettings('order').then(res => {
+      const s = res?.data;
+      if (!alive || !res?.success || !s) return;
+      setRates(r => ({
+        standard: Number(s['app.order.rental-rate-standard']) || r.standard,
+        xl: Number(s['app.order.rental-rate-xl']) || r.xl,
+      }));
+      const raw = s['app.order.rental-quick-hours'];
+      const quick = (Array.isArray(raw) ? raw : String(raw ?? '').split(','))
+        .map(Number).filter(h => Number.isInteger(h) && h > 0);
+      if (quick.length) {
+        setHoursOptions(quick);
+        setHours(h => (quick.includes(h) ? h : quick[0]));
+      }
+    }).catch(() => { /* giữ mặc định */ });
+    return () => { alive = false; };
+  }, []);
+
+  const HOURLY_RATE = selectedBox?.cellType === 'XL' ? rates.xl : rates.standard;
   const subtotal = hours * HOURLY_RATE;
+
+  // Giảm giá tính lại mỗi khi đổi số giờ; mã không còn đạt đơn tối thiểu thì báo và không trừ.
+  const promoMinOrder = Number(promoDetail?.minOrderAmount) || 0;
+  const promoBelowMin = promoApplied && promoMinOrder > 0 && subtotal < promoMinOrder;
+  useEffect(() => {
+    if (!promoApplied || !promoDetail || promoBelowMin) { setPromoDiscount(0); return; }
+    let discount = 0;
+    if (promoDetail.discountType === 'PERCENTAGE') {
+      discount = Math.round(subtotal * Number(promoDetail.discountValue) / 100);
+      if (promoDetail.maxDiscountAmount) discount = Math.min(discount, Number(promoDetail.maxDiscountAmount));
+    } else if (promoDetail.discountType === 'FIXED_AMOUNT') {
+      discount = Number(promoDetail.discountValue);
+    }
+    setPromoDiscount(Math.min(discount, subtotal));
+  }, [promoApplied, promoDetail, promoBelowMin, subtotal]);
   const total = Math.max(0, subtotal - promoDiscount);
 
   const handleApplyPromo = async () => {
@@ -1008,26 +1046,15 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
     setPromoDiscount(0); setPromoDetail(null);
 
     try {
-      const res = await api.validatePromotionCode(code, jwt);
-      if (res.success && res.data) {
-        const promo = res.data;
-        if (promo.minOrderAmount && subtotal < promo.minOrderAmount) {
-          setPromoError(`Đơn hàng tối thiểu ${new Intl.NumberFormat('vi-VN').format(promo.minOrderAmount)}đ để áp dụng mã này`);
-        } else {
-          let discount = 0;
-          if (promo.discountType === 'PERCENTAGE') {
-            discount = subtotal * promo.discountValue / 100;
-            if (promo.maxDiscountAmount) discount = Math.min(discount, promo.maxDiscountAmount);
-          } else if (promo.discountType === 'FIXED_AMOUNT') {
-            discount = promo.discountValue;
-          }
-          discount = Math.min(discount, subtotal);
-          setPromoDetail(promo);
-          setPromoDiscount(discount);
-          setPromoApplied(true);
-        }
+      // Backend trả { code, valid, reason, promotion } — trước đây đọc nhầm cả gói là voucher nên mã
+      // nào cũng hiện "đã áp dụng".
+      const res = await api.validatePromotionCode(code, jwt, activeLockerId, subtotal);
+      const result = res?.data;
+      if (res?.success && result?.valid && result.promotion) {
+        setPromoDetail(result.promotion);
+        setPromoApplied(true);
       } else {
-        setPromoError(res.message || 'Mã không hợp lệ');
+        setPromoError(result?.reason || res?.message || 'Mã không hợp lệ');
       }
     } catch (err) {
       setPromoError('Lỗi kiểm tra mã, vui lòng thử lại');
@@ -1048,7 +1075,7 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
         cellType: selectedBox.cellType === 'XL' ? 'XL' : 'STANDARD',
         hours: hours,
         note: note || undefined,
-        promotionCode: (promoApplied && promoCode.trim()) ? promoCode.trim() : undefined,
+        promotionCode: (promoApplied && !promoBelowMin && promoCode.trim()) ? promoCode.trim() : undefined,
       };
 
       console.log('%c[ORDER] Creating RENTAL order via /api/orders/rental:', 'color:#fbbf24', payload);
@@ -1071,7 +1098,6 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
   };
 
   const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
-  const hoursOptions = [1, 2, 3, 4, 6, 8, 12, 24];
 
   return (
     <div className="screen">
@@ -1125,7 +1151,7 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
               {promoLoading ? <Loader2 size={18} className="spinner" /> : 'Áp dụng'}
             </button>
           ) : (
-            <button className="btn btn-secondary" onClick={() => { setPromoCode(''); setPromoApplied(false); setPromoDiscount(0); }} style={{ width: 'auto', padding: '0 20px', borderRadius: 12, backgroundColor: '#f1f5f9', color: '#64748b' }}>
+            <button className="btn btn-secondary" onClick={() => { setPromoCode(''); setPromoApplied(false); setPromoDiscount(0); setPromoDetail(null); }} style={{ width: 'auto', padding: '0 20px', borderRadius: 12, backgroundColor: '#f1f5f9', color: '#64748b' }}>
               <X size={18} /> Gỡ bỏ
             </button>
           )}
@@ -1134,7 +1160,9 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
         {promoApplied && promoDetail && (
           <div style={{ marginTop: 12, padding: 12, backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12 }}>
             <div style={{ color: '#166534', fontWeight: 600, fontSize: 14 }}>{promoDetail.title || promoDetail.name}</div>
-            <div style={{ color: '#22c55e', fontSize: 13, marginTop: 4 }}>Đã giảm: {fmt(promoDiscount)}</div>
+            {promoBelowMin
+              ? <div style={{ color: '#b45309', fontSize: 13, marginTop: 4 }}>Cần đơn tối thiểu {fmt(promoMinOrder)} để dùng mã này — tăng số giờ thuê hoặc gỡ mã.</div>
+              : <div style={{ color: '#22c55e', fontSize: 13, marginTop: 4 }}>Đã giảm: {fmt(promoDiscount)}</div>}
           </div>
         )}
       </div>

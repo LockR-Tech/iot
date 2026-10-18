@@ -55,7 +55,17 @@ export const cancelKioskQrSession = (sessionId, pollToken)   => be('POST', `/api
 
 // ─── Services / Promotions ───────────────────────────────────
 export const getServices       = (token, lockerId)    => be('GET', `/api/services?lockerId=${lockerId}&category=STORAGE`, null, token);
-export const validatePromotionCode = (code, token)        => be('GET', `/api/promotions/validate/${code.toUpperCase()}`, null, token);
+// Phản hồi: { code, valid, reason, promotion }. Gửi lockerId để mã chỉ áp dụng ở tủ khác bị từ chối,
+// orderTotal để backend kiểm đơn tối thiểu.
+export const validatePromotionCode = (code, token, lockerId, orderTotal) => {
+  const q = new URLSearchParams();
+  if (lockerId != null) q.set('lockerId', lockerId);
+  if (orderTotal != null) q.set('orderTotal', orderTotal);
+  const qs = q.toString();
+  return be('GET', `/api/promotions/validate/${encodeURIComponent(code.toUpperCase())}${qs ? `?${qs}` : ''}`, null, token);
+};
+// Quy tắc nghiệp vụ công khai admin cấu hình (giá thuê, số giờ gợi ý…): { "<key>": giá trị }.
+export const getPublicSettings = (scope)               => be('GET', `/api/settings/${scope}/public`);
 
 // ─── Lockers / Boxes ─────────────────────────────────────────
 export const getLockerById     = (lockerId, token)    => be('GET', `/api/lockers/${lockerId}`, null, token);
