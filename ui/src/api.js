@@ -93,6 +93,8 @@ export const cancelOrder       = (token, orderId)     => be('PUT', `/api/orders/
 // trả qrCodeUrl (ảnh VietQR) + referenceId (nội dung chuyển khoản); tiền chỉ được ghi nhận qua webhook SePay.
 export const checkoutSepay     = (token, orderId)     => be('POST', '/api/payments/checkout', { orderId, method: 'SEPAY' }, token);
 export const getPayment        = (token, paymentId)   => be('GET', `/api/payments/${paymentId}`, null, token);
+// Chỉ khi admin bật giả lập thanh toán (test): coi như đã nhận `amount` đồng (bỏ trống = đủ số) cho giao dịch.
+export const simulatePayment   = (token, { paymentId, amount }) => be('POST', '/api/payments/simulate', { paymentId, ...(amount ? { amount } : {}) }, token);
 
 // ─── IoT (public) ────────────────────────────────────────────
 export const verifyPin         = (pinCode, boxId)     => be('POST', '/api/iot/verify-pin', { pinCode, boxId });
