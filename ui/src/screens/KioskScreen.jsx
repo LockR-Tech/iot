@@ -6,7 +6,7 @@ import {
   CheckCircle, KeyRound, Hash, User, CreditCard,
   Unlock, Home, Loader2, Delete, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X,
-  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw
+  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import boxStack3d from '../assets/illustrations/box_stack_3d.png';
@@ -1215,6 +1215,18 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
   const [dropOpened, setDropOpened] = useState(false);
   const aliveRef = useRef(true);
   const openAfterPaidRef = useRef(null);
+  // Nút "Giả lập thanh toán" (test) — chỉ hiện khi admin bật app.payment.simulation-enabled.
+  const [simEnabled, setSimEnabled] = useState(false);
+  const [simAmount, setSimAmount] = useState('');
+  const [simulating, setSimulating] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.getPublicSettings('payment')
+      .then(res => { if (alive) setSimEnabled(res?.data?.['app.payment.simulation-enabled'] === true); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Khách rời màn (về trang chủ) giữa chừng thì không mở ô cho người đã đi.
   useEffect(() => {
@@ -1329,6 +1341,18 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     }
     setCanceling(false);
     goHome();
+  };
+
+  // Coi như vừa nhận `simAmount` đồng (trống = đủ số) cho giao dịch này; vòng hỏi trạng thái tự mở ô khi PAID.
+  const simulateSepay = async () => {
+    if (!sepay?.paymentId || simulating) return;
+    setSimulating(true); setMsg('');
+    try {
+      const amount = Number(simAmount) > 0 ? Number(simAmount) : undefined;
+      const res = await api.simulatePayment(jwt, { paymentId: sepay.paymentId, amount });
+      if (!res?.success) setMsg(payErrorText(res, 'Không giả lập được thanh toán.'));
+    } catch { setMsg('Lỗi kết nối'); }
+    setSimulating(false);
   };
 
   const recheckSepay = () => {
@@ -1455,6 +1479,23 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
             {sepayPhase === 'expired' && <Msg type="error" text="Hết thời gian chờ. Nếu bạn đã chuyển khoản, bấm Kiểm tra lại." />}
             {sepayPhase === 'failed' && <Msg type="error" text="Giao dịch chuyển khoản không hợp lệ (số tiền không khớp với đơn). Vui lòng liên hệ hỗ trợ Lock.R." />}
             {msg && <Msg type="error" text={msg} />}
+
+            {simEnabled && sepay.paymentId != null && sepayPhase === 'waiting' && (
+              <div className="vietqr-simulate">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  placeholder={String(sepay.amount)}
+                  value={simAmount}
+                  onChange={e => setSimAmount(e.target.value)}
+                  aria-label="Số tiền giả lập"
+                />
+                <Btn variant="outline" onClick={simulateSepay} loading={simulating}>
+                  <FlaskConical size={18} /> Giả lập thanh toán (test)
+                </Btn>
+              </div>
+            )}
 
             <div className="vietqr-actions">
               {sepayPhase === 'expired' && <Btn onClick={recheckSepay}><RefreshCw size={18} /> Kiểm tra lại</Btn>}

@@ -581,6 +581,12 @@ html, body, #root {
 .vietqr-note { font-size: 13px; line-height: 1.45; color: var(--text-secondary); }
 .vietqr-info .polling-status, .vietqr-info .msg { margin-top: 0; }
 .vietqr-actions { display: flex; gap: 10px; }
+.vietqr-simulate { display: flex; gap: 10px; margin: 6px 0 10px; }
+.vietqr-simulate input {
+  width: 130px; padding: 10px 12px; border-radius: 12px; font-size: 15px;
+  border: 1px dashed #a78bfa; background: transparent; color: var(--text-primary);
+}
+.vietqr-simulate .btn { flex: 1; border-color: #a78bfa; color: #7c3aed; }
 
 /* ─── Success Screen ────────────────────────────────────── */
 .success-hero { text-align: center; }
