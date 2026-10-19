@@ -1696,10 +1696,14 @@ function PinScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
         }
       } else {
         setPinState('error');
-        if (verifyRes.message === 'E_IOT_PIN_LOCKED' || verifyRes.data?.message === 'E_IOT_PIN_LOCKED') {
-          setMsg('Nhập sai 5 lần! Thao tác bị tạm khóa. Vui lòng vào App Mobile để "Cấp lại mã PIN" rồi thử lại.');
+        const reason = verifyRes.reasonCode || verifyRes.data?.reasonCode;
+        const serverMsg = verifyRes.data?.message || verifyRes.message;
+        if (reason === 'E_IOT_PIN_LOCKED' || serverMsg === 'E_IOT_PIN_LOCKED' || serverMsg?.includes('tạm khóa') || serverMsg?.includes('tạm khoá')) {
+          setMsg(serverMsg && serverMsg !== 'E_IOT_PIN_LOCKED'
+            ? serverMsg
+            : 'Nhập sai quá số lần cho phép! Thao tác bị tạm khóa. Vui lòng vào App Mobile để "Cấp lại mã PIN" rồi thử lại.');
         } else {
-          setMsg(verifyRes.data?.message || verifyRes.message || 'Mã PIN không hợp lệ');
+          setMsg(serverMsg || 'Mã PIN không hợp lệ');
           setTimeout(() => { clearPin(); }, 2000);
         }
       }
