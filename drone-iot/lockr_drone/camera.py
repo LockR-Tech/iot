@@ -173,14 +173,14 @@ class StreamHandler(BaseHTTPRequestHandler):
         mac = ":".join(f"{(uuid.getnode() >> ele) & 0xff:02X}" for ele in range(40, -1, -8))
         drone_id = getattr(cls.settings, "drone_id", "DRONE-S550-07") if cls.settings else "DRONE-S550-07"
 
-        flight_mode = "MANUAL"
-        armed = False
-        landed_state = "ON_GROUND"
-        gps_fix = 0
-        gps_sats = 0
-        battery_pct = 100
-        voltage = 16.4
-        current = 0.8
+        flight_mode = None
+        armed = None
+        landed_state = None
+        gps_fix = None
+        gps_sats = None
+        battery_pct = None
+        voltage = None
+        current = None
         mavlink_status = "disconnected"
 
         if cls.state:
@@ -191,23 +191,26 @@ class StreamHandler(BaseHTTPRequestHandler):
             elif snapshot.get("serial_open"):
                 mavlink_status = "connecting"
 
-            groups = snapshot.get("groups", {})
-            flight_grp = groups.get("flight", ({}, None))[0]
-            battery_grp = groups.get("battery", ({}, None))[0]
-            gps_grp = groups.get("gps", ({}, None))[0]
-            landed_grp = groups.get("landed", ({}, None))[0]
+            # Chỉ đọc các thông số bay/pin khi Pixhawk thực sự có kết nối MAVLink
+            if mavlink_status == "connected":
+                groups = snapshot.get("groups", {})
+                flight_grp = groups.get("flight", ({}, None))[0]
+                battery_grp = groups.get("battery", ({}, None))[0]
+                gps_grp = groups.get("gps", ({}, None))[0]
+                landed_grp = groups.get("landed", ({}, None))[0]
 
-            flight_mode = flight_grp.get("mode") or "MANUAL"
-            armed = bool(flight_grp.get("armed"))
-            landed_state = landed_grp.get("landedState") or "ON_GROUND"
-            gps_fix = gps_grp.get("fixType") or 0
-            gps_sats = gps_grp.get("satellites") or 0
-            if battery_grp.get("percent") is not None:
-                battery_pct = battery_grp.get("percent")
-            if battery_grp.get("voltageV") is not None:
-                voltage = battery_grp.get("voltageV")
-            if battery_grp.get("currentA") is not None:
-                current = battery_grp.get("currentA")
+                flight_mode = flight_grp.get("mode")
+                if "armed" in flight_grp:
+                    armed = bool(flight_grp.get("armed"))
+                landed_state = landed_grp.get("landedState")
+                gps_fix = gps_grp.get("fixType")
+                gps_sats = gps_grp.get("satellites")
+                if battery_grp.get("percent") is not None:
+                    battery_pct = battery_grp.get("percent")
+                if battery_grp.get("voltageV") is not None:
+                    voltage = battery_grp.get("voltageV")
+                if battery_grp.get("currentA") is not None:
+                    current = battery_grp.get("currentA")
 
         return {
             "id": 1,
