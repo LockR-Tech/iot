@@ -1,6 +1,6 @@
-"""Bridge telemetry drone Lock.R: đọc MAVLink từ autopilot, gửi telemetry lên MQTT.
+"""Bridge telemetry drone Lock.R: đọc MAVLink từ autopilot, phát camera stream và gửi telemetry lên MQTT.
 
-    python main.py             đọc MAVLink và gửi lên broker
+    python main.py             đọc MAVLink, mở camera stream và gửi telemetry lên broker
     python main.py --print     chỉ in bản tin ra màn hình (không cần MQTT)
 """
 import argparse
@@ -16,6 +16,7 @@ from lockr_drone.config import Settings, load_env_file
 from lockr_drone.mavlink_reader import MavlinkReader
 from lockr_drone.state import DroneState
 from lockr_drone.telemetry import build_payload, link_state
+from lockr_drone.camera import CameraStreamerServer
 
 log = logging.getLogger("bridge")
 SUMMARY_EVERY_S = 60
@@ -25,6 +26,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--print", dest="print_only", action="store_true", help="chỉ in telemetry, không gửi MQTT")
     parser.add_argument("--count", type=int, default=0, help="dừng sau N bản tin (0 = chạy mãi)")
+    parser.add_argument("--no-camera", dest="no_camera", action="store_true", help="tắt camera stream")
+    parser.add_argument("--camera-port", type=int, default=8080, help="cổng phát video camera (mặc định 8080)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -38,6 +41,12 @@ def main() -> int:
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
+
+    # Khởi động camera streamer ngầm (phát tại /stream.mjpg)
+    camera_server = None
+    if not args.no_camera:
+        camera_server = CameraStreamerServer(port=args.camera_port)
+        camera_server.start()
 
     state = DroneState()
     reader = MavlinkReader(state, settings.mavlink_port, settings.mavlink_baud, settings.message_rate_hz)
@@ -76,6 +85,8 @@ def main() -> int:
                 break
     finally:
         reader.stop()
+        if camera_server is not None:
+            camera_server.stop()
         if publisher is not None:
             publisher.stop()
     return 0
