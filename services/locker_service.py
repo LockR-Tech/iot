@@ -43,7 +43,8 @@ class LockerService:
                  serial_manager=None, cabinet_state=None,
                  heartbeat_service=None, db_manager=None,
                  discovery_service=None,
-                 exit_process: Optional[Callable[[int], None]] = None):
+                 exit_process: Optional[Callable[[int], None]] = None,
+                 lids: Optional[dict] = None):
         self.mqtt = mqtt_client
         self.hw = hardware_controller
         self.serial = serial_manager
@@ -55,6 +56,7 @@ class LockerService:
         # các dịch vụ rồi thoát; test truyền hàm ghi lại để không giết tiến trình test.
         self._exit_process = exit_process or _exit_process
         self._restart_requested = False
+        self.lids = lids or {}
 
         # Lệnh phần cứng chạy tuần tự trên một luồng riêng: một lần mở mất ~3 s,
         # chạy thẳng trong callback MQTT sẽ chặn cả vòng lặp mạng của paho.
@@ -243,6 +245,18 @@ class LockerService:
     #  OPEN / CLOSE / SYNC (BE → RPi)
     # ═══════════════════════════════════════════════════════════
 
+
+    def _find_lid(self, slot_index: Optional[int]):
+        if not self.lids or slot_index is None:
+            return None
+        if slot_index in self.lids:
+            return self.lids[slot_index]
+        if str(slot_index) in self.lids:
+            return self.lids[str(slot_index)]
+        if len(self.lids) == 1 and (slot_index == 1 or 1 in self.lids):
+            return self.lids.get(1) or list(self.lids.values())[0]
+        return None
+
     def _resolve_slot(self, cab: dict, data: dict):
         """(slotIndex, boxId) của lệnh: slotIndex nếu backend gửi, không thì tra boxId trong sơ đồ."""
         box_id = data.get("boxId", data.get("box_id"))
@@ -292,6 +306,20 @@ class LockerService:
                                  LockerHwState.UNKNOWN.value, "HW_ERROR", "Hardware not available")
             return
 
+        lid = self._find_lid(slot_index)
+        if lid:
+            logger.warning(f"🚀 SLIDING LID OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
+            result = lid.open()
+            ok = result.get("result") == "OK" and (result.get("state") == "OPEN" or getattr(lid, "at_end", lambda: False)())
+            hw_state = LockerHwState.OPEN.value if ok else LockerHwState.CLOSED.value
+            status = "SUCCESS" if ok else "FAILED"
+            error_code = None if ok else result.get("error", "LID_JAMMED")
+            message = "Sliding lid opened completely" if ok else f"Sliding lid failed to open: {error_code}"
+            self._publish_result(cab, "open", command_id, slot_index, box_id, status, hw_state, error_code, message)
+            if self.heartbeat:
+                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
+            return
+
         logger.warning(f"🔓 OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
         result = self.serial.open_slot(slot_index, slave_id=slave_id)
         relay_ok = result.get("result") == "OK"
@@ -326,6 +354,20 @@ class LockerService:
             return
         if not self.serial:
             logger.error("Serial not available")
+            return
+
+        lid = self._find_lid(slot_index)
+        if lid:
+            logger.warning(f"🔒 SLIDING LID CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
+            result = lid.close()
+            ok = result.get("result") == "OK" and (result.get("state") == "CLOSED" or getattr(lid, "at_home", lambda: False)())
+            hw_state = LockerHwState.CLOSED.value if ok else LockerHwState.OPEN.value
+            status = "SUCCESS" if ok else "FAILED"
+            error_code = None if ok else result.get("error", "LID_JAMMED")
+            message = "Sliding lid closed completely and verified" if ok else f"Sliding lid failed to close: {error_code}"
+            self._publish_result(cab, "close", command_id, slot_index, box_id, status, hw_state, error_code, message)
+            if self.heartbeat:
+                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
             return
 
         logger.warning(f"🔒 CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, cmdId={command_id}")

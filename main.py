@@ -139,6 +139,7 @@ def main():
         db_manager=db_manager,
         discovery_service=discovery_service,
         exit_process=_request_restart,
+        lids=lids,
     )
     logger.info("[7/7] Services ready (Locker, Heartbeat, Discovery)")
 

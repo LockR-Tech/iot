@@ -87,6 +87,32 @@ class MqttPublisher:
         online = status_payload(self.settings.drone_id, "online")
         client.publish(self._status_topic, online, qos=1, retain=True,
                        properties=self._signed(self._status_topic, online))
+        self.publish_discovery()
+
+    def publish_discovery(self) -> None:
+        """Tự động phát bản tin discovery lên hệ thống giống Kiosk để backend nhận diện Pi tự động."""
+        try:
+            from datetime import datetime, timezone
+            from .telemetry import get_pi_info
+            pi = get_pi_info()
+            mac = pi.get("macAddress")
+            if not mac or not self.connected:
+                return
+            disc_topic = f"iot/{mac}/discovery/result"
+            payload = json.dumps({
+                "macAddress": mac,
+                "firmwareVersion": pi.get("firmware", "LockR-Drone v1.0"),
+                "hardware": "drone",
+                "ipAddress": pi.get("ipAddress"),
+                "cameraStreamUrl": pi.get("cameraStreamUrl"),
+                "slaves": [],
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            self.client.publish(disc_topic, payload, qos=1)
+            log.info("Đã gửi bản tin discovery cho Pi (%s) tới topic %s", mac, disc_topic)
+        except Exception as e:
+            log.warning("Không thể gửi discovery: %s", e)
+
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self.connected = False

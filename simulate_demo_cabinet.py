@@ -69,6 +69,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 OPEN_COMMAND_TOPIC = "cabinet/+/command/open"
+CLOSE_COMMAND_TOPIC = "cabinet/+/command/close"
 # Booking -> IoT sync (GAP 1): locker-service publishes a box's new lifecycle
 # state (RESERVED/OCCUPIED/AVAILABLE/FAULT) here whenever an order reserves/
 # occupies/releases a cell, so the cabinet can mirror the booking. Fire-and-
@@ -164,9 +165,9 @@ def _heartbeat_loop(client: mqtt.Client):
 
 def _on_connect(client, userdata, flags, reason_code, properties=None):
     if reason_code == 0:
-        print(f"[SIM] Connected. Subscribing to {OPEN_COMMAND_TOPIC}, {SYNC_COMMAND_TOPIC} "
+        print(f"[SIM] Connected. Subscribing to {OPEN_COMMAND_TOPIC}, {CLOSE_COMMAND_TOPIC}, {SYNC_COMMAND_TOPIC} "
               f"and {RESTART_COMMAND_TOPIC}")
-        client.subscribe([(OPEN_COMMAND_TOPIC, 1), (SYNC_COMMAND_TOPIC, 1), (RESTART_COMMAND_TOPIC, 1)])
+        client.subscribe([(OPEN_COMMAND_TOPIC, 1), (CLOSE_COMMAND_TOPIC, 1), (SYNC_COMMAND_TOPIC, 1), (RESTART_COMMAND_TOPIC, 1)])
         # Announce seeded cabinets ONLINE right after (re)connect.
         with _known_lock:
             cabinets = list(_known_cabinets)
@@ -225,6 +226,28 @@ def _reply_after_delay(client: mqtt.Client, locker_id: str, command_id, box_id, 
         ).start()
 
 
+
+def _reply_close_after_delay(client: mqtt.Client, locker_id: str, command_id, box_id, slot_index):
+    time.sleep(SIM_DELAY_SECONDS)
+    failed = SIM_FORCE_FAIL
+    status = "FAILED" if failed else "SUCCESS"
+    payload = {
+        "commandId": command_id,
+        "boxId": box_id,
+        "slotIndex": slot_index,
+        "status": status,
+        "hwState": "OPEN" if failed else "CLOSED",
+        "errorCode": "SIMULATED_FAILURE" if failed else None,
+        "errorMessage": "Simulated hardware failure" if failed else "Simulated: door/lid closed",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    result_topic = f"cabinet/{locker_id}/command/close/result"
+    client.publish(result_topic, json.dumps(payload), qos=1)
+    icon = "FAILED" if failed else "OK"
+    print(f"[SIM] {icon} -> {result_topic}: {json.dumps(payload)}")
+    if not failed and box_id is not None:
+        _report_box_hw_state(client, locker_id, box_id, slot_index, "CLOSED")
+
 def _reply_restart(client: mqtt.Client, locker_id: str, data: dict):
     """Answer a controller restart command. The real controller (main.py) publishes
     ACCEPTED and then exits so systemd restarts it; the simulator only replies."""
@@ -263,6 +286,17 @@ def _on_message(client, userdata, msg):
               f"slot={data.get('slotIndex')} state={state}{order_part}")
         return
 
+    if msg.topic.endswith("/command/close"):
+        command_id = data.get("commandId")
+        box_id = data.get("boxId", data.get("box_id"))
+        slot_index = data.get("slotIndex")
+        print(f"[SIM] CLOSE request: locker={locker_id} box={box_id} slot={slot_index} commandId={command_id}")
+        threading.Thread(
+            target=_reply_close_after_delay,
+            args=(client, locker_id, command_id, box_id, slot_index),
+            daemon=True,
+        ).start()
+        return
     if msg.topic.endswith("/command/restart"):
         _reply_restart(client, locker_id, data)
         return

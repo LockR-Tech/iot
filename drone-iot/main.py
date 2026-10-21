@@ -42,13 +42,14 @@ def main() -> int:
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
-    # Khởi động camera streamer ngầm (phát tại /stream.mjpg)
+    state = DroneState()
+
+    # Khởi động camera streamer ngầm (phát tại /stream.mjpg và /api/status)
     camera_server = None
     if not args.no_camera:
-        camera_server = CameraStreamerServer(port=args.camera_port)
+        camera_server = CameraStreamerServer(port=args.camera_port, state=state, settings=settings)
         camera_server.start()
 
-    state = DroneState()
     reader = MavlinkReader(state, settings.mavlink_port, settings.mavlink_baud, settings.message_rate_hz)
     reader.start()
 
@@ -79,6 +80,7 @@ def main() -> int:
                 log.info("mqtt=%s mavlink=%s · đã gửi %d, bỏ %d (không có kết nối broker)",
                          "connected" if publisher.connected else "disconnected",
                          link_state(snapshot, settings.heartbeat_timeout_s), sent, dropped)
+                publisher.publish_discovery()
                 sent = dropped = 0
                 last_summary = time.monotonic()
             if args.count and sequence >= args.count:
