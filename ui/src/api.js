@@ -53,8 +53,7 @@ export const createKioskQrSession = (lockerId)               => be('POST', '/api
 export const pollKioskQrSession   = (sessionId, pollToken)   => be('GET', `/api/auth/kiosk/qr-sessions/${encodeURIComponent(sessionId)}`, null, null, qrPollHeader(pollToken));
 export const cancelKioskQrSession = (sessionId, pollToken)   => be('POST', `/api/auth/kiosk/qr-sessions/${encodeURIComponent(sessionId)}/cancel`, null, null, qrPollHeader(pollToken));
 
-// ─── Services / Promotions ───────────────────────────────────
-export const getServices       = (token, lockerId)    => be('GET', `/api/services?lockerId=${lockerId}&category=STORAGE`, null, token);
+// ─── Promotions ──────────────────────────────────────────────
 // Phản hồi: { code, valid, reason, promotion }. Gửi lockerId để mã chỉ áp dụng ở tủ khác bị từ chối,
 // orderTotal để backend kiểm đơn tối thiểu.
 export const validatePromotionCode = (code, token, lockerId, orderTotal) => {
