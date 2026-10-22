@@ -309,12 +309,17 @@ class LockerService:
         lid = self._find_lid(slot_index)
         if lid:
             logger.warning(f"🚀 SLIDING LID OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
-            result = lid.open()
-            ok = result.get("result") == "OK" and (result.get("state") == "OPEN" or getattr(lid, "at_end", lambda: False)())
+            if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True):
+                logger.info("⚡ LID_BYPASS_PHYSICAL_MOTION: Chi gui message va log ket qua mo, khong truot nap co hoc.")
+                ok = True
+                result = {"result": "OK", "state": "OPEN"}
+            else:
+                result = lid.open()
+                ok = result.get("result") == "OK" and (result.get("state") == "OPEN" or getattr(lid, "at_end", lambda: False)())
             hw_state = LockerHwState.OPEN.value if ok else LockerHwState.CLOSED.value
             status = "SUCCESS" if ok else "FAILED"
             error_code = None if ok else result.get("error", "LID_JAMMED")
-            message = "Sliding lid opened completely" if ok else f"Sliding lid failed to open: {error_code}"
+            message = "Sliding lid open simulated successfully (hardware bypass)" if (ok and getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True)) else ("Sliding lid opened completely" if ok else f"Sliding lid failed to open: {error_code}")
             self._publish_result(cab, "open", command_id, slot_index, box_id, status, hw_state, error_code, message)
             if self.heartbeat:
                 self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
@@ -359,12 +364,17 @@ class LockerService:
         lid = self._find_lid(slot_index)
         if lid:
             logger.warning(f"🔒 SLIDING LID CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
-            result = lid.close()
-            ok = result.get("result") == "OK" and (result.get("state") == "CLOSED" or getattr(lid, "at_home", lambda: False)())
+            if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True):
+                logger.info("⚡ LID_BYPASS_PHYSICAL_MOTION: Chi gui message va log ket qua dong, khong truot nap co hoc.")
+                ok = True
+                result = {"result": "OK", "state": "CLOSED"}
+            else:
+                result = lid.close()
+                ok = result.get("result") == "OK" and (result.get("state") == "CLOSED" or getattr(lid, "at_home", lambda: False)())
             hw_state = LockerHwState.CLOSED.value if ok else LockerHwState.OPEN.value
             status = "SUCCESS" if ok else "FAILED"
             error_code = None if ok else result.get("error", "LID_JAMMED")
-            message = "Sliding lid closed completely and verified" if ok else f"Sliding lid failed to close: {error_code}"
+            message = "Sliding lid close simulated successfully (hardware bypass)" if (ok and getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True)) else ("Sliding lid closed completely and verified" if ok else f"Sliding lid failed to close: {error_code}")
             self._publish_result(cab, "close", command_id, slot_index, box_id, status, hw_state, error_code, message)
             if self.heartbeat:
                 self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)

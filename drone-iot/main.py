@@ -1,7 +1,7 @@
-"""Bridge telemetry drone Lock.R: đọc MAVLink từ autopilot, phát camera stream và gửi telemetry lên MQTT.
+"""Bridge telemetry drone Lock.R: đọc MAVLink từ autopilot, phát camera stream tích hợp AI ArUco và gửi telemetry lên MQTT.
 
     python main.py             đọc MAVLink, mở camera stream và gửi telemetry lên broker
-    python main.py --print     chỉ in bản tin ra màn hình (không cần MQTT)
+    python main.py --print     chỉ in telemetry, không gửi MQTT
 """
 import argparse
 import json
@@ -10,6 +10,8 @@ import signal
 import sys
 import threading
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from lockr_drone.config import Settings, load_env_file
@@ -44,20 +46,51 @@ def main() -> int:
 
     state = DroneState()
 
-    # Khởi động camera streamer ngầm (phát tại /stream.mjpg và /api/status)
-    camera_server = None
-    if not args.no_camera:
-        camera_server = CameraStreamerServer(port=args.camera_port, state=state, settings=settings)
-        camera_server.start()
-
-    reader = MavlinkReader(state, settings.mavlink_port, settings.mavlink_baud, settings.message_rate_hz)
-    reader.start()
-
     publisher = None
     if not args.print_only:
         from lockr_drone.mqtt_publisher import MqttPublisher
         publisher = MqttPublisher(settings)
+
+    def on_marker_detected(marker_id, x, y, z):
+        session_id = f"session-{uuid.uuid4().hex[:8]}"
+        payload = {
+            "messageId": str(uuid.uuid4()),
+            "correlationId": str(uuid.uuid4()),
+            "sessionId": session_id,
+            "eventType": "MARKER_DETECTED",
+            "droneId": settings.drone_id,
+            "arucoDictionary": "DICT_4X4_50",
+            "arucoMarkerId": int(marker_id),
+            "mode": "INDOOR_ARUCO_DEMO",
+            "distanceM": round(z, 3) if z is not None else 0.8,
+            "offsetX": round(x, 3) if x is not None else 0.0,
+            "offsetY": round(y, 3) if y is not None else 0.0,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        if publisher:
+            success = publisher.publish_delivery_event(payload)
+            if success:
+                log.info("🚀 Đã phát MARKER_DETECTED cho ArUco #%s lên MQTT: %s", marker_id, payload)
+            else:
+                log.warning("Không thể gửi MARKER_DETECTED (MQTT chưa kết nối)")
+
+    # Khởi động camera streamer ngầm tích hợp ArUco Vision (phát tại /stream.mjpg và /api/status)
+    camera_server = None
+    if not args.no_camera:
+        camera_server = CameraStreamerServer(
+            port=args.camera_port,
+            state=state,
+            settings=settings,
+            on_marker_detected=on_marker_detected
+        )
+        camera_server.start()
+
+    if publisher is not None:
+        publisher.delivery_command_listener = lambda cmd: camera_server.handle_delivery_command(cmd) if camera_server else None
         publisher.start()
+
+    reader = MavlinkReader(state, settings.mavlink_port, settings.mavlink_baud, settings.message_rate_hz)
+    reader.start()
 
     sequence = sent = dropped = 0
     last_summary = time.monotonic()

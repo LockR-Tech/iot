@@ -3,6 +3,8 @@
 Topic:
     lockr/drones/{droneId}/telemetry   QoS 0, KHÔNG retained — bản tin cũ không có giá trị
     lockr/drones/{droneId}/status      QoS 1, retained — online/offline, kèm thời điểm
+    lockr/drone/delivery/commands      QoS 1, nhận lệnh điều phối giao hàng (MARKER_VALIDATED, LID_OPENED, v.v.)
+    lockr/drone/delivery/events        QoS 1, gửi sự kiện nhận diện (MARKER_DETECTED)
 
 Pi mất mạng hoặc tắt đột ngột thì broker tự phát `offline` (Last Will). Telemetry không
 gửi bù: mất kết nối lúc nào thì bản tin lúc đó bị bỏ, có mạng lại là gửi số đo hiện tại.
@@ -47,6 +49,9 @@ class MqttPublisher:
         self._stopping = False
         self._telemetry_topic = telemetry_topic(settings.drone_id)
         self._status_topic = status_topic(settings.drone_id)
+        self._delivery_commands_topic = "lockr/drone/delivery/commands"
+        self._delivery_events_topic = "lockr/drone/delivery/events"
+        self.delivery_command_listener = None
 
         transport = "websockets" if settings.mqtt_transport == "websockets" else "tcp"
         self.client = mqtt.Client(
@@ -64,6 +69,7 @@ class MqttPublisher:
         self.client.reconnect_delay_set(min_delay=1, max_delay=30)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
+        self.client.on_message = self._on_message
 
         will = status_payload(settings.drone_id, "offline")
         self.client.will_set(
@@ -89,6 +95,40 @@ class MqttPublisher:
                        properties=self._signed(self._status_topic, online))
         self.publish_discovery()
 
+        # Subscribe topic nhận lệnh điều phối giao hàng (mở nắp tủ, ArUco validation)
+        try:
+            client.subscribe(self._delivery_commands_topic, qos=1)
+            log.info("Đã subscribe topic nhận lệnh giao hàng: %s", self._delivery_commands_topic)
+        except Exception as e:
+            log.warning("Không thể subscribe topic lệnh %s: %s", self._delivery_commands_topic, e)
+
+    def _on_message(self, client, userdata, message):
+        try:
+            if message.topic == self._delivery_commands_topic:
+                payload_str = message.payload.decode("utf-8")
+                data = json.loads(payload_str)
+                drone_id = data.get("droneId")
+                # Nếu backend gửi đích danh droneId, chỉ xử lý nếu đúng drone
+                if drone_id and drone_id != self.settings.drone_id:
+                    return
+                log.info("Nhận lệnh giao hàng từ backend: %s", data.get("eventType"))
+                if self.delivery_command_listener:
+                    self.delivery_command_listener(data)
+        except Exception as e:
+            log.warning("Lỗi xử lý tin nhắn MQTT: %s", e)
+
+    def publish_delivery_event(self, payload: dict) -> bool:
+        """Gửi sự kiện phát hiện marker ArUco lên backend để kích hoạt mở nắp tủ."""
+        if not self.connected:
+            return False
+        try:
+            body = json.dumps(payload, ensure_ascii=False)
+            info = self.client.publish(self._delivery_events_topic, body, qos=1)
+            return info.rc == mqtt.MQTT_ERR_SUCCESS
+        except Exception as e:
+            log.warning("Lỗi gửi delivery event lên MQTT: %s", e)
+            return False
+
     def publish_discovery(self) -> None:
         """Tự động phát bản tin discovery lên hệ thống giống Kiosk để backend nhận diện Pi tự động."""
         try:
@@ -112,7 +152,6 @@ class MqttPublisher:
             log.info("Đã gửi bản tin discovery cho Pi (%s) tới topic %s", mac, disc_topic)
         except Exception as e:
             log.warning("Không thể gửi discovery: %s", e)
-
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self.connected = False
