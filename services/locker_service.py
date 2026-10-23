@@ -179,6 +179,14 @@ class LockerService:
             # Cùng hàng đợi với lệnh phần cứng: lệnh mở đang chạy dở xong rồi mới thoát. Cũng không được
             # chạy trên luồng mạng của paho — luồng đó phải rảnh để nhận PUBACK của kết quả.
             self._executor.submit(self._safe, self._handle_restart_command, cab, data)
+        elif action == "lid":
+            self._executor.submit(self._safe, self._handle_lid_command, cab, data)
+        elif action == "lid-jog":
+            self._executor.submit(self._safe, self._handle_lid_jog_command, cab, data)
+        elif action == "lid-tune":
+            self._executor.submit(self._safe, self._handle_lid_tune_command, cab, data)
+        elif action == "panel":
+            self._executor.submit(self._safe, self._handle_panel_command, cab, data)
         else:
             logger.debug(f"Unhandled command: {topic}")
 
@@ -245,6 +253,113 @@ class LockerService:
     #  OPEN / CLOSE / SYNC (BE → RPi)
     # ═══════════════════════════════════════════════════════════
 
+
+    # ═══════════════════════════════════════════════════════════
+    #  LID / PANEL CONTROL (admin web: ADMIN + KTV tủ, qua iot-service)
+    #  Topic lệnh:  cabinet/{id}/command/{lid|lid-jog|lid-tune|panel}
+    #  Topic kết quả: cabinet/{id}/command/{...}/result  (khớp commandId)
+    #  Lệnh chạy nắp trả ACCEPTED ngay (không chờ động cơ xong); web poll `panel` để xem trạng thái.
+    # ═══════════════════════════════════════════════════════════
+
+    def _publish_cmd_result(self, cab: dict, action: str, command_id, status: str, extra: Optional[dict] = None):
+        payload = {"commandId": command_id, "status": status,
+                   "timestamp": datetime.now(timezone.utc).isoformat()}
+        if extra:
+            payload.update(extra)
+        self.mqtt.publish(f"cabinet/{cab['id']}/command/{action}/result", json.dumps(payload), qos=1)
+
+    def _lid_by_axis(self, data: dict):
+        axis = data.get("axis", 1)
+        try:
+            axis = int(axis)
+        except (TypeError, ValueError):
+            axis = 1
+        return axis, (self.lids.get(axis) or self.lids.get(str(axis)))
+
+    def _save_lid_tuning(self):
+        try:
+            from hardware.factory import save_lid_tuning
+            save_lid_tuning(settings.LID_TUNING_FILE, self.lids)
+        except Exception as e:
+            logger.warning(f"Could not save lid tuning: {e}")
+
+    def _handle_lid_command(self, cab: dict, data: dict):
+        command_id = data.get("commandId")
+        axis, lid = self._lid_by_axis(data)
+        action = str(data.get("action", "")).lower()
+        if lid is None:
+            return self._publish_cmd_result(cab, "lid", command_id, "FAILED",
+                {"axis": axis, "errorCode": "AXIS_DISABLED", "errorMessage": f"Trục {axis} chưa bật trên Pi"})
+        if action not in ("open", "close", "home", "stop"):
+            return self._publish_cmd_result(cab, "lid", command_id, "FAILED",
+                {"axis": axis, "errorCode": "BAD_ACTION", "errorMessage": "Lệnh nắp phải là open/close/home/stop"})
+        try:
+            lid.stop() if action == "stop" else lid.run_async(action)
+            self._publish_cmd_result(cab, "lid", command_id, "ACCEPTED",
+                {"axis": axis, "action": action, "lid": lid.status()})
+        except RuntimeError as e:
+            busy = str(e) == "LID_BUSY"
+            self._publish_cmd_result(cab, "lid", command_id, "FAILED",
+                {"axis": axis, "errorCode": "LID_BUSY" if busy else "LID_ERROR",
+                 "errorMessage": "Trục đang chạy, dừng trước rồi thử lại" if busy else str(e),
+                 "lid": lid.status()})
+
+    def _handle_lid_jog_command(self, cab: dict, data: dict):
+        command_id = data.get("commandId")
+        axis, lid = self._lid_by_axis(data)
+        if lid is None:
+            return self._publish_cmd_result(cab, "lid-jog", command_id, "FAILED",
+                {"axis": axis, "errorCode": "AXIS_DISABLED", "errorMessage": f"Trục {axis} chưa bật trên Pi"})
+        direction = str(data.get("direction", "open")).lower()
+        try:
+            revolutions = float(data.get("revolutions", 0))
+        except (TypeError, ValueError):
+            revolutions = 0
+        if direction not in ("open", "close") or revolutions <= 0:
+            return self._publish_cmd_result(cab, "lid-jog", command_id, "FAILED",
+                {"axis": axis, "errorCode": "BAD_PARAM", "errorMessage": "Chiều phải là open/close và số vòng > 0"})
+        max_revs = lid.config().get("max_revs", 12.5)
+        if revolutions > max_revs:
+            return self._publish_cmd_result(cab, "lid-jog", command_id, "FAILED",
+                {"axis": axis, "errorCode": "TOO_MANY_REVS", "errorMessage": f"Tối đa {max_revs} vòng mỗi lần (giới hạn an toàn)"})
+        try:
+            lid.run_async("jog", revolutions=revolutions, toward_end=(direction == "open"))
+            self._publish_cmd_result(cab, "lid-jog", command_id, "ACCEPTED",
+                {"axis": axis, "revolutions": revolutions, "direction": direction, "lid": lid.status()})
+        except RuntimeError as e:
+            busy = str(e) == "LID_BUSY"
+            self._publish_cmd_result(cab, "lid-jog", command_id, "FAILED",
+                {"axis": axis, "errorCode": "LID_BUSY" if busy else "LID_ERROR",
+                 "errorMessage": "Trục đang chạy, dừng trước rồi thử lại" if busy else str(e),
+                 "lid": lid.status()})
+
+    def _handle_lid_tune_command(self, cab: dict, data: dict):
+        command_id = data.get("commandId")
+        axis, lid = self._lid_by_axis(data)
+        if lid is None:
+            return self._publish_cmd_result(cab, "lid-tune", command_id, "FAILED",
+                {"axis": axis, "errorCode": "AXIS_DISABLED", "errorMessage": f"Trục {axis} chưa bật trên Pi"})
+        allowed = {"rps", "start_rps", "ramp_steps", "pulse_us", "max_revs",
+                   "steps_per_rev", "open_dir_high", "limit_active_low"}
+        changes = {k: v for k, v in (data.get("changes") or {}).items() if k in allowed and v is not None}
+        try:
+            config = lid.tune(**changes)
+            self._save_lid_tuning()
+            self._publish_cmd_result(cab, "lid-tune", command_id, "SUCCESS", {"axis": axis, "config": config})
+        except (ValueError, RuntimeError) as e:
+            busy = str(e) == "LID_BUSY"
+            self._publish_cmd_result(cab, "lid-tune", command_id, "FAILED",
+                {"axis": axis, "errorCode": "LID_BUSY" if busy else "TUNE_REJECTED",
+                 "errorMessage": "Trục đang chạy, dừng trước rồi chỉnh" if busy else str(e)})
+
+    def _handle_panel_command(self, cab: dict, data: dict):
+        command_id = data.get("commandId")
+        lids = []
+        for axis in (1, 2):
+            lid = self.lids.get(axis) or self.lids.get(str(axis))
+            lids.append({"axis": axis, "enabled": lid is not None,
+                         "status": lid.status() if lid else None})
+        self._publish_cmd_result(cab, "panel", command_id, "SUCCESS", {"lids": lids})
 
     def _find_lid(self, slot_index: Optional[int]):
         if not self.lids or slot_index is None:
