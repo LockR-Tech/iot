@@ -43,6 +43,28 @@ class TestBleAdvertiserService(unittest.TestCase):
             service.stop()
             self.assertFalse(service._is_running)
 
+    def test_bluetoothctl_fallback_puts_the_locker_name_in_the_advertisement(self):
+        # Pi không có btmgmt ⇒ dùng bluetoothctl; tên phải nằm trong gói quảng bá, không chỉ là alias.
+        settings.BLE_ENABLED = True
+        service = BleAdvertiserService(device_name="LOCKR_CAB-TU01")
+        proc = MagicMock()
+
+        def run(cmd, **_kwargs):
+            if "btmgmt" in cmd:
+                raise FileNotFoundError("btmgmt")
+            return MagicMock(returncode=0)
+
+        with patch("platform.system", return_value="Linux"), \
+                patch("os.path.exists", return_value=True), \
+                patch("os.listdir", return_value=["hci0"]), \
+                patch("subprocess.run", side_effect=run), \
+                patch("subprocess.Popen", return_value=proc):
+            service.start()
+
+        written = "".join(call.args[0] for call in proc.stdin.write.call_args_list)
+        self.assertIn("menu advertise\nname LOCKR_CAB-TU01\nback\n", written)
+        self.assertLess(written.index("name LOCKR_CAB-TU01"), written.index("advertise on"))
+
     def test_ble_disabled(self):
         settings.BLE_ENABLED = False
         service = BleAdvertiserService(device_name="LOCKR_TEST")

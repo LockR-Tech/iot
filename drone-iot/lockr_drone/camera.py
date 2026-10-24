@@ -15,6 +15,9 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 log = logging.getLogger("camera")
 
+# Đã được xác thực mã mà chừng này giây chưa thấy nắp mở thì quét lại.
+VALIDATED_TIMEOUT_S = 30.0
+
 try:
     from picamera2 import Picamera2
     PICAMERA2_AVAILABLE = True
@@ -52,6 +55,7 @@ class CameraCapture:
         self.last_marker_seen_at = None
         self.rejected_until = 0.0
         self.lid_opened_time = None
+        self.validated_at = None
         self.cur_x = None
         self.cur_y = None
         self.cur_z = None
@@ -267,6 +271,16 @@ class CameraCapture:
                     self.last_detected_id = None
                     self.detected_at = None
 
+            # Chờ nắp quá lâu (bản tin LID_OPENED / LID_OPEN_FAILED bị mất, tủ mất kết nối): quét lại để gửi
+            # MARKER_DETECTED lần nữa — backend trả MARKER_VALIDATED nếu phiên còn chờ, hoặc mở phiên mới.
+            if self.state == "VALIDATED" and self.validated_at and (now - self.validated_at) >= VALIDATED_TIMEOUT_S:
+                self.state = "SCANNING"
+                self.status_message = "No lid response from locker. Re-scanning ArUco marker..."
+                self.detected_id_count = 0
+                self.last_detected_id = None
+                self.detected_at = None
+                self.validated_at = None
+
             # Đếm ngược giai đoạn mở nắp
             if self.state == "LID_OPEN" and self.lid_opened_time:
                 elapsed = now - self.lid_opened_time
@@ -384,10 +398,11 @@ class CameraCapture:
         with self.lock:
             if event_type == "MARKER_VALIDATED":
                 self.state = "VALIDATED"
+                self.validated_at = time.time()
                 box_id = data.get("compartmentId")
                 marker_id = data.get("arucoMarkerId", self.last_detected_id)
                 self.status_message = f"Marker #{marker_id} Validated! Box #{box_id}. Opening lid..."
-            elif event_type in ("WRONG_MARKER", "SAFETY_ABORT", "MARKER_REJECTED"):
+            elif event_type in ("WRONG_MARKER", "SAFETY_ABORT", "MARKER_REJECTED", "LID_OPEN_FAILED"):
                 err_msg = data.get("errorMessage", "Sai mã ArUco hoặc không khớp đơn")
                 self.state = "REJECTED"
                 self.detected_id_count = 0

@@ -114,7 +114,16 @@ class BleAdvertiserService:
                 stderr=subprocess.DEVNULL,
                 text=True,
             )
-            cmd = f"power on\nsystem-alias {dev_name}\nadvertise on\n"
+            # `advertise on` mặc định không mang tên (system-alias chỉ đổi tên adapter), nên phải đặt
+            # tên trong menu advertise — thiếu bước này app/web quét thấy Pi nhưng không nhận ra tủ.
+            cmd = (
+                "power on\n"
+                f"system-alias {dev_name}\n"
+                "menu advertise\n"
+                f"name {dev_name}\n"
+                "back\n"
+                "advertise on\n"
+            )
             if self._proc.stdin:
                 self._proc.stdin.write(cmd)
                 self._proc.stdin.flush()
