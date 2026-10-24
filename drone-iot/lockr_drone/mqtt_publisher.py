@@ -19,7 +19,7 @@ from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
 
 from .config import Settings
-from .signing import SIGNATURE_PROPERTY, sign
+from .signing import SIGNATURE_PROPERTY, sign, verify
 
 log = logging.getLogger("mqtt")
 
@@ -84,6 +84,13 @@ class MqttPublisher:
         properties.UserProperty = (SIGNATURE_PROPERTY, sign(self.settings.device_key, topic, payload))
         return properties
 
+    def _command_is_signed(self, topic: str, payload: str, properties) -> bool:
+        """Lệnh từ backend có chữ ký đúng khoá của drone này. Chưa cấu hình DEVICE_KEY thì không kiểm được ⇒ từ chối."""
+        if not self.settings.device_key:
+            return False
+        user_properties = dict(getattr(properties, "UserProperty", None) or [])
+        return verify(self.settings.device_key, topic, payload, user_properties.get(SIGNATURE_PROPERTY))
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
             log.error("Broker từ chối kết nối: %s", reason_code)
@@ -106,6 +113,10 @@ class MqttPublisher:
         try:
             if message.topic == self._delivery_commands_topic:
                 payload_str = message.payload.decode("utf-8")
+                # Broker có thể là broker công khai: chỉ làm theo lệnh backend ký bằng khoá của drone này.
+                if not self._command_is_signed(message.topic, payload_str, message.properties):
+                    log.warning("Bỏ lệnh giao hàng không có chữ ký hợp lệ")
+                    return
                 data = json.loads(payload_str)
                 drone_id = data.get("droneId")
                 # Nếu backend gửi đích danh droneId, chỉ xử lý nếu đúng drone
@@ -123,7 +134,9 @@ class MqttPublisher:
             return False
         try:
             body = json.dumps(payload, ensure_ascii=False)
-            info = self.client.publish(self._delivery_events_topic, body, qos=1)
+            # Backend chỉ nhận sự kiện có chữ ký của đúng drone (messageId + timestamp chống phát lại).
+            info = self.client.publish(self._delivery_events_topic, body, qos=1,
+                                       properties=self._signed(self._delivery_events_topic, body))
             return info.rc == mqtt.MQTT_ERR_SUCCESS
         except Exception as e:
             log.warning("Lỗi gửi delivery event lên MQTT: %s", e)
