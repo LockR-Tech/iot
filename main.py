@@ -13,6 +13,8 @@ from services.locker_service import LockerService
 from services.heartbeat_service import HeartbeatService
 from services.discovery_service import DiscoveryService
 from services.ble_service import BleAdvertiserService
+from services.ble_gatt_service import BleGattService
+from services.ble_open_token import PublicKeyStore
 from services.control_log import ControlLog
 from utils.logger import get_logger
 
@@ -174,9 +176,21 @@ def main():
     heartbeat_service.start()
     control_log.start()
 
-    # 9. Khởi tạo & phát sóng BLE Beacon cho App Mobile nhận diện mở tủ
+    # 9. BLE: GATT server mở ô bằng mã backend ký (F3-G11) — tự quảng bá tên LOCKR_<mã tủ>.
+    # Không chạy được (không có Bluetooth/bless) thì chỉ phát beacon để app nhận ra tủ ở gần.
     ble_service = BleAdvertiserService(cabinet_state=cabinet_state)
-    ble_service.start()
+    ble_gatt = None
+    if settings.BLE_ENABLED and settings.BLE_GATT_ENABLED:
+        from infracstructure.service_panel import DEFAULT_BACKEND
+        key_store = PublicKeyStore(settings.BLE_PUBLIC_KEY_FILE,
+                                   settings.BACKEND_API_URL or DEFAULT_BACKEND,
+                                   env_key=settings.BLE_PUBLIC_KEY)
+        ble_gatt = BleGattService(cabinet_state, serial_manager, key_store,
+                                  name_fn=ble_service.resolve_device_name, control_log=control_log)
+        if not ble_gatt.start():
+            ble_service.start()
+    else:
+        ble_service.start()
 
     logger.warning("✅ System is READY (Logged at WARNING level)")
 
@@ -188,6 +202,8 @@ def main():
         pass
     finally:
         logger.info("Shutting down...")
+        if ble_gatt:
+            ble_gatt.stop()
         ble_service.stop()
         control_log.stop()
         heartbeat_service.stop()

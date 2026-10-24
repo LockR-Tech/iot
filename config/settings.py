@@ -36,6 +36,11 @@ class Settings:
     LOCKER_CODE = os.getenv("LOCKER_CODE", "CAB-TU01").strip()
     BLE_ENABLED = _env_bool("BLE_ENABLED", True)
     BLE_DEVICE_NAME = os.getenv("BLE_DEVICE_NAME", "").strip()
+    # Mở ô qua Bluetooth (F3-G11): GATT server nhận mã do backend ký Ed25519 (docs ble-open-contract).
+    # Khoá công khai tải từ backend rồi lưu ở BLE_PUBLIC_KEY_FILE; BLE_PUBLIC_KEY (base64) ghi đè.
+    BLE_GATT_ENABLED = _env_bool("BLE_GATT_ENABLED", True)
+    BLE_PUBLIC_KEY = os.getenv("BLE_PUBLIC_KEY", "").strip()
+    BLE_PUBLIC_KEY_FILE = os.getenv("BLE_PUBLIC_KEY_FILE", str(Path(__file__).parent / "ble_public_key.json"))
     # Mở/thử ô chỉ báo SUCCESS khi cảm biến thấy cửa mở. Đặt false khi chưa nối cảm biến.
     REQUIRE_DOOR_SENSOR = _env_bool("REQUIRE_DOOR_SENSOR", True)
 

@@ -12,4 +12,8 @@ dependencies = [
     "uvicorn>=0.27.0",
     "psycopg2-binary>=2.9.9",
     "gpiod>=2.2; sys_platform == 'linux'",  # GPIO trực tiếp (HARDWARE_BACKEND=gpio)
+    # Mở ô qua Bluetooth (F3-G11): GATT server trên BlueZ. bless 0.2.6 còn dùng module của bleak < 1.
+    "bless>=0.2.6; sys_platform == 'linux'",
+    "bleak>=0.22,<1; sys_platform == 'linux'",
+    "cryptography>=43",  # kiểm chữ ký Ed25519 của mã mở ô
 ]
