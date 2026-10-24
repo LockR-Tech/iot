@@ -45,7 +45,7 @@ class CameraCapture:
 
         # Trạng thái ArUco AI Vision & HUD
         self.state = "SCANNING"  # SCANNING, DETECTED, VALIDATED, LID_OPEN, COMPLETED, REJECTED
-        self.status_message = "Sẵn sàng quét mã ArUco ô tủ (DICT_4X4_50)..."
+        self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
         self.last_detected_id = None
         self.detected_id_count = 0
         self.lid_opened_time = None
@@ -226,7 +226,7 @@ class CameraCapture:
 
                     if self.detected_id_count >= 5:  # DEBOUNCE_FRAMES
                         self.state = "DETECTED"
-                        self.status_message = f"Phát hiện ArUco #{found_id}! Đang xác thực với tủ..."
+                        self.status_message = f"Target #{found_id} detected! Verifying with locker..."
                         if self.on_marker_detected:
                             # Gọi callback gửi MQTT ra ngoài
                             threading.Thread(
@@ -244,9 +244,9 @@ class CameraCapture:
                 elapsed = now - self.lid_opened_time
                 remaining = max(0, 7.0 - elapsed)
                 if remaining > 0:
-                    self.status_message = f"Nắp tủ đang MỞ! Mô phỏng thả hàng: còn {remaining:.1f}s..."
+                    self.status_message = f"Locker lid is OPEN! Cargo drop: {remaining:.1f}s..."
                 else:
-                    self.status_message = "Thả hàng hoàn tất! Tủ đang đóng nắp an toàn..."
+                    self.status_message = "Cargo drop completed! Locker lid closing..."
 
         # Vẽ HUD trực tiếp lên khung hình xem live
         draw_frame = frame_bgr.copy()
@@ -258,47 +258,98 @@ class CameraCapture:
         ret_enc, buffer = cv2.imencode(".jpg", draw_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
         return buffer.tobytes() if ret_enc else None
 
+    @staticmethod
+    def _draw_pill(frame, x1, y1, x2, y2, bg_color=(20, 20, 20), alpha=0.65):
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 > x1 and y2 > y1:
+            sub = frame[y1:y2, x1:x2]
+            color_block = np.full(sub.shape, bg_color, dtype=np.uint8)
+            cv2.addWeighted(color_block, alpha, sub, 1.0 - alpha, 0, sub)
+
     def _draw_hud(self, frame, found_id):
         h, w, _ = frame.shape
 
-        # Thanh tiêu đề trên
-        cv2.rectangle(frame, (0, 0), (w, 50), (25, 25, 25), -1)
-        cv2.putText(frame, "LOCK.R DRONE | AI ARUCO VISION (8080)", (15, 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 215, 255), 2)
-        cv2.putText(frame, "CSI IMX219 | DICT_4X4_50 (8x8cm) | Auto Lid Opening", (15, 42),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+        # 1. Subtle Drone Targeting Reticle (Center crosshair)
+        cx, cy = w // 2, h // 2
+        reticle_color = (130, 130, 130)
+        cv2.line(frame, (cx - 24, cy), (cx - 7, cy), reticle_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx + 7, cy), (cx + 24, cy), reticle_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy - 24), (cx, cy - 7), reticle_color, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy + 7), (cx, cy + 24), reticle_color, 1, cv2.LINE_AA)
 
-        # Màu Badge trạng thái
-        state_color = (0, 255, 255)  # Vàng (SCANNING / DETECTED)
-        if self.state == "VALIDATED":
-            state_color = (0, 255, 0)    # Xanh lá
-        elif self.state == "LID_OPEN":
-            state_color = (255, 180, 0)  # Xanh dương
-        elif self.state == "COMPLETED":
-            state_color = (0, 255, 0)    # Xanh sáng
-        elif self.state == "REJECTED":
-            state_color = (0, 0, 255)    # Đỏ
+        # 2. Top-Left: Minimal Cam Label
+        self._draw_pill(frame, 12, 10, 108, 34, bg_color=(20, 20, 20), alpha=0.7)
+        cv2.circle(frame, (23, 22), 4, (0, 255, 0), -1, cv2.LINE_AA)
+        cv2.putText(frame, "AI VISION", (34, 26),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
 
-        badge_text = f"STATE: {self.state}"
-        cv2.putText(frame, badge_text, (w - 240, 32),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, state_color, 2)
+        # 3. Top-Right: Clean Status Pill
+        state_configs = {
+            "SCANNING":  ("SCANNING",        (0, 215, 255)),   # Amber
+            "DETECTED":  ("TARGET DETECTED", (0, 255, 255)),   # Yellow
+            "VALIDATED": ("TARGET VERIFIED", (0, 255, 0)),     # Green
+            "LID_OPEN":  ("LID OPEN",        (255, 180, 50)),  # Light Blue
+            "COMPLETED": ("COMPLETED",       (0, 255, 0)),     # Green
+            "REJECTED":  ("REJECTED",        (0, 0, 255)),     # Red
+        }
+        label, state_color = state_configs.get(self.state, (self.state, (200, 200, 200)))
 
-        # Khung tọa độ Pose nếu đang thấy marker
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+        pill_pad_x, pill_pad_y = 10, 6
+        rx2 = w - 12
+        rx1 = rx2 - tw - pill_pad_x * 2
+        ry1 = 10
+        ry2 = ry1 + th + pill_pad_y * 2
+
+        self._draw_pill(frame, rx1, ry1, rx2, ry2, bg_color=(20, 20, 20), alpha=0.7)
+        cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), state_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, label, (rx1 + pill_pad_x, ry1 + th + pill_pad_y - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, state_color, 1, cv2.LINE_AA)
+
+        # 4. Target Pose Info (Top Center) - Only when marker detected
         if self.cur_z is not None:
-            pose_box = (
-                f"Marker #{found_id if found_id is not None else self.last_detected_id}  |  "
-                f"Dist: {self.cur_z:.2f}m  |  "
-                f"X: {self.cur_x:+.2f}m  Y: {self.cur_y:+.2f}m"
-            )
-            cv2.rectangle(frame, (15, 60), (w - 15), 35, (20, 20, 20), -1) if hasattr(cv2, "rectangle") else None
-            cv2.rectangle(frame, (15, 60), (w - 15, 90), (20, 20, 20), -1)
-            cv2.putText(frame, pose_box, (25, 82),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 180), 2)
+            mid = found_id if found_id is not None else self.last_detected_id
+            pose_text = f"MARKER #{mid} | DIST: {self.cur_z:.2f}m | X: {self.cur_x:+.2f}m Y: {self.cur_y:+.2f}m"
+            (pw, ph), _ = cv2.getTextSize(pose_text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+            px1 = (w - pw) // 2 - 10
+            py1 = 10
+            px2 = (w + pw) // 2 + 10
+            py2 = py1 + ph + 12
 
-        # Thanh trạng thái dưới
-        cv2.rectangle(frame, (0, h - 45), (w, h), (20, 20, 20), -1)
-        cv2.putText(frame, self.status_message, (15, h - 16),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+            self._draw_pill(frame, px1, py1, px2, py2, bg_color=(15, 25, 20), alpha=0.75)
+            cv2.rectangle(frame, (px1, py1), (px2, py2), (0, 255, 180), 1, cv2.LINE_AA)
+            cv2.putText(frame, pose_text, (px1 + 10, py1 + ph + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 180), 1, cv2.LINE_AA)
+
+        # 5. Bottom Center Toast - Only for active transitions
+        bottom_msg = None
+        if self.state == "LID_OPEN" and self.lid_opened_time:
+            elapsed = time.time() - self.lid_opened_time
+            remaining = max(0, 7.0 - elapsed)
+            if remaining > 0:
+                bottom_msg = f"Lid Open - Cargo Drop: {remaining:.1f}s remaining..."
+            else:
+                bottom_msg = "Cargo Dropped. Closing Locker Lid..."
+        elif self.state == "VALIDATED":
+            mid = found_id if found_id is not None else self.last_detected_id
+            bottom_msg = f"Marker #{mid} Confirmed. Opening Locker Lid..."
+        elif self.state == "COMPLETED":
+            bottom_msg = "Delivery Completed Successfully."
+        elif self.state == "REJECTED":
+            bottom_msg = "Target Rejected. Safety Abort."
+
+        if bottom_msg:
+            (bw, bh), _ = cv2.getTextSize(bottom_msg, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            bx1 = (w - bw) // 2 - 12
+            by1 = h - 36
+            bx2 = (w + bw) // 2 + 12
+            by2 = h - 14
+
+            self._draw_pill(frame, bx1, by1, bx2, by2, bg_color=(15, 15, 15), alpha=0.8)
+            cv2.putText(frame, bottom_msg, (bx1 + 12, by2 - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     def handle_delivery_command(self, data: dict):
         event_type = data.get("eventType")
@@ -307,25 +358,25 @@ class CameraCapture:
                 self.state = "VALIDATED"
                 box_id = data.get("compartmentId")
                 marker_id = data.get("arucoMarkerId", self.last_detected_id)
-                self.status_message = f"Mã #{marker_id} HỢP LỆ! Ô tủ: #{box_id}. Đang mở nắp..."
+                self.status_message = f"Marker #{marker_id} Validated! Box #{box_id}. Opening lid..."
             elif event_type in ("WRONG_MARKER", "SAFETY_ABORT", "MARKER_REJECTED"):
                 err_msg = data.get("errorMessage", "Sai mã ArUco hoặc không khớp đơn")
                 self.state = "REJECTED"
-                self.status_message = f"TỪ CHỐI: {err_msg}"
+                self.status_message = f"REJECTED: {err_msg}"
                 threading.Timer(5.0, self._reset_scanning).start()
             elif event_type == "LID_OPENED":
                 self.state = "LID_OPEN"
                 self.lid_opened_time = time.time()
-                self.status_message = "Nắp ô tủ đã MỞ! Đang tiến hành thả hàng (7s)..."
+                self.status_message = "Locker lid is OPEN! Cargo drop in progress (7s)..."
             elif event_type == "DELIVERY_READY":
                 self.state = "COMPLETED"
-                self.status_message = "GIAO HÀNG THÀNH CÔNG! Nắp tủ đã đóng kín. Sẵn sàng lấy hàng."
+                self.status_message = "DELIVERY COMPLETED! Locker lid closed. Ready for pickup."
                 threading.Timer(15.0, self._reset_scanning).start()
 
     def _reset_scanning(self):
         with self.lock:
             self.state = "SCANNING"
-            self.status_message = "Sẵn sàng quét mã ArUco ô tủ (DICT_4X4_50)..."
+            self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
             self.last_detected_id = None
             self.detected_id_count = 0
             self.cur_x, self.cur_y, self.cur_z = None, None, None
