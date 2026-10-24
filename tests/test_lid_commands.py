@@ -13,14 +13,17 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from config.settings import settings
+from hardware.gpio_locker import GpioLockerManager
 from hardware.gpio_pins import FakePins
 from hardware.lid_controller import LidController
 from infracstructure.cabinet_state import CabinetState
 from services.locker_service import LockerService
-from tests.test_mqtt_contract import FakeMqtt
+from tests.test_mqtt_contract import DOORS, RELAYS, FakeMqtt
 
 
 def make_lid(pins):
@@ -93,6 +96,57 @@ class LidCommandContractTest(unittest.TestCase):
         r = self.result("panel")
         self.assertEqual(r["status"], "SUCCESS")
         self.assertEqual([l["enabled"] for l in r["lids"]], [True, False])
+
+
+class OpenRoutingTest(unittest.TestCase):
+    """Tủ có nắp trượt vẫn mở ô bằng relay; chỉ lệnh drone (`lid: true`) mới trượt nắp."""
+
+    def setUp(self):
+        self.patches = [mock.patch.object(settings, "REQUIRE_DOOR_SENSOR", False),
+                        mock.patch.object(settings, "LID_BYPASS_PHYSICAL_MOTION", True)]
+        for p in self.patches:
+            p.start()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.mqtt = FakeMqtt()
+        self.state = CabinetState(state_path=os.path.join(self.tmp.name, "s.json"), fallback_locker_id="7")
+        self.pins = FakePins()
+        self.locker = GpioLockerManager(self.pins, RELAYS, DOORS, unlock_ms=5, settle_ms=5,
+                                        close_wait_ms=1, poll_ms=10_000, debounce_ms=50).start()
+        self.lid = make_lid(FakePins())
+        self.service = LockerService(self.mqtt, None, serial_manager=self.locker,
+                                     cabinet_state=self.state, lids={1: self.lid})
+
+    def tearDown(self):
+        self.service.shutdown()
+        self.locker.close()
+        self.tmp.cleanup()
+        for p in self.patches:
+            p.stop()
+
+    def send(self, payload):
+        self.service.handle_incoming_message("cabinet/7/command/open", json.dumps(payload))
+        self.service._executor.submit(lambda: None).result(timeout=5)
+
+    def relay_pulses(self):
+        return [pin for pin, high in self.pins.history if high]
+
+    def test_open_without_lid_flag_pulses_relay(self):
+        # slot 1 trùng số với trục 1 — trước đây bị nhầm sang nắp trượt.
+        for slot in (1, 4):
+            with self.subTest(slot=slot):
+                self.pins.history.clear()
+                self.send({"commandId": f"o-{slot}", "boxId": 40 + slot, "slotIndex": slot, "action": "OPEN"})
+                r = self.mqtt.on("cabinet/7/command/open/result")[-1]
+                self.assertEqual(r["status"], "SUCCESS")
+                self.assertEqual(r["errorMessage"], "Door opened")
+                self.assertEqual(self.relay_pulses(), [RELAYS[slot]])
+
+    def test_open_with_lid_flag_uses_lid_not_relay(self):
+        self.send({"commandId": "d-1", "boxId": 40, "slotIndex": 2, "action": "OPEN", "lid": True})
+        r = self.mqtt.on("cabinet/7/command/open/result")[-1]
+        self.assertEqual(r["status"], "SUCCESS")
+        self.assertIn("hardware bypass", r["errorMessage"])
+        self.assertEqual(self.relay_pulses(), [])
 
 
 if __name__ == "__main__":
