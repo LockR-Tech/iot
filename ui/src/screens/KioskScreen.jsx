@@ -997,16 +997,23 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
 
   // Giá thuê và số giờ gợi ý do admin cấu hình (scope order, công khai). Chỉ để hiển thị:
   // backend luôn tự tính tiền. API lỗi ⇒ giữ mặc định của catalog.
-  const [rates, setRates] = useState({ standard: 5000, xl: 10000 });
+  const [rates, setRates] = useState({ standard: 5000, xl: 10000, standardDaily: 40000, xlDaily: 80000 });
   const [hoursOptions, setHoursOptions] = useState([1, 2, 3, 4, 6, 8, 12, 24]);
   useEffect(() => {
     let alive = true;
     api.getPublicSettings('order').then(res => {
       const s = res?.data;
       if (!alive || !res?.success || !s) return;
+      // Giá ngày được phép bằng 0 (= chỉ tính theo giờ) nên không dùng `||`.
+      const daily = (key, fallback) => {
+        const v = Number(s[key]);
+        return s[key] != null && Number.isFinite(v) && v >= 0 ? v : fallback;
+      };
       setRates(r => ({
         standard: Number(s['app.order.rental-rate-standard']) || r.standard,
         xl: Number(s['app.order.rental-rate-xl']) || r.xl,
+        standardDaily: daily('app.order.rental-daily-rate-standard', r.standardDaily),
+        xlDaily: daily('app.order.rental-daily-rate-xl', r.xlDaily),
       }));
       const raw = s['app.order.rental-quick-hours'];
       const quick = (Array.isArray(raw) ? raw : String(raw ?? '').split(','))
@@ -1019,8 +1026,13 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
     return () => { alive = false; };
   }, []);
 
-  const HOURLY_RATE = selectedBox?.cellType === 'XL' ? rates.xl : rates.standard;
-  const subtotal = hours * HOURLY_RATE;
+  const isXl = selectedBox?.cellType === 'XL';
+  const HOURLY_RATE = isXl ? rates.xl : rates.standard;
+  // Giá 24 giờ, kẹp về tối đa 24 × giá giờ — cùng công thức OrderRules.rentalPrice ở server.
+  const DAILY_RATE = Math.min(isXl ? rates.xlDaily : rates.standardDaily, HOURLY_RATE * 24);
+  const subtotal = DAILY_RATE > 0
+    ? Math.floor(hours / 24) * DAILY_RATE + Math.min((hours % 24) * HOURLY_RATE, DAILY_RATE)
+    : hours * HOURLY_RATE;
 
   // Giảm giá tính lại mỗi khi đổi số giờ; mã không còn đạt đơn tối thiểu thì báo và không trừ.
   const promoMinOrder = Number(promoDetail?.minOrderAmount) || 0;
@@ -1128,7 +1140,7 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
           ))}
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
-          Giá: {fmt(HOURLY_RATE)}/giờ — Tổng {hours} giờ = <strong style={{ color: 'var(--accent)' }}>{fmt(subtotal)}</strong>
+          Giá: {fmt(HOURLY_RATE)}/giờ{DAILY_RATE > 0 && <> · {fmt(DAILY_RATE)}/ngày</>} — Tổng {hours} giờ = <strong style={{ color: 'var(--accent)' }}>{fmt(subtotal)}</strong>
         </div>
       </div>
 
