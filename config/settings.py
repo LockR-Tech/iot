@@ -104,6 +104,8 @@ class Settings:
 
     # Tốc độ/xung chỉnh trên bảng điều khiển kỹ thuật, ghi đè LID_* (riêng từng Pi, không commit).
     LID_TUNING_FILE = os.getenv("LID_TUNING_FILE", str(Path(__file__).parent / "lid_tuning.json"))
+    # Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend — giữ qua mất mạng và khởi động lại.
+    CONTROL_LOG_FILE = os.getenv("CONTROL_LOG_FILE", str(Path(__file__).parent / "control_log_outbox.jsonl"))
     # Bỏ qua phát xung vật lý cho nắp trượt khi nhận lệnh MQTT (chỉ gửi log & bản tin kết quả MQTT)
     LID_BYPASS_PHYSICAL_MOTION = _env_bool("LID_BYPASS_PHYSICAL_MOTION", True)
 

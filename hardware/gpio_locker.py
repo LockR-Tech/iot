@@ -60,6 +60,8 @@ class GpioLockerManager:
 
         self._on_door_event = on_door_event
         self._on_reconnect: Optional[Callable] = None
+        # Gọi sau mỗi lần kích relay: on_pulse(slot_index, label, unlock_ms, result) — nhật ký điều khiển tủ.
+        self.on_pulse: Optional[Callable[[int, str, int, dict], None]] = None
         self._group: Optional[PinGroup] = None
         self._op_lock = threading.Lock()        # một khoá có điện tại một thời điểm
         self._stop = threading.Event()
@@ -198,7 +200,13 @@ class GpioLockerManager:
                 # Luôn ngắt cuộn khoá, kể cả khi có lỗi giữa chừng.
                 self._set_relay(slot_index, False)
             time.sleep(self.settle_ms / 1000)
-        return self._result(slot_index, start)
+        result = self._result(slot_index, start)
+        if self.on_pulse:
+            try:
+                self.on_pulse(slot_index, label, unlock_ms, result)
+            except Exception as e:
+                logger.error(f"on_pulse failed for slot {slot_index}: {e}")
+        return result
 
     def _result(self, slot_index: int, start: float) -> dict:
         return {
