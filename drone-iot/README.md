@@ -6,6 +6,11 @@ Hợp đồng topic/payload/chữ ký: `../../docs/01-overview/drone-telemetry-c
 
 **Chỉ đọc.** Thứ duy nhất gửi xuống autopilot là yêu cầu tần suất message. Không arm, không đổi mode, không điều khiển servo.
 
+**Giao hàng ArUco (`lockr/drone/delivery/events` ↔ `…/commands`) bắt buộc `DEVICE_KEY`.** Sự kiện gửi lên
+(`MARKER_DETECTED`, `DROP_PHASE_COMPLETED`) được ký như telemetry; backend bỏ bản tin không ký, ký sai drone,
+lệch giờ quá 120 giây (Pi phải đồng bộ NTP) hoặc trùng `messageId`. Ngược lại Pi chỉ làm theo lệnh backend ký
+bằng khoá của chính drone này; thiếu `DEVICE_KEY` thì mọi lệnh giao hàng bị bỏ.
+
 ## Thành phần
 
 | File | Việc |
