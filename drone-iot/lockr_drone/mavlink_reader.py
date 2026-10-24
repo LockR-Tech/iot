@@ -4,7 +4,9 @@ CHỈ ĐỌC. Thứ duy nhất gửi xuống autopilot là MAV_CMD_SET_MESSAGE_I
 message). Không gửi heartbeat kiểu trạm mặt đất — để Pi tắt đi không kích hoạt GCS failsafe —
 và không có lệnh arm, đổi mode, servo hay nhiệm vụ nào ở đây.
 """
+import glob
 import logging
+import os
 import threading
 import time
 
@@ -37,22 +39,40 @@ class MavlinkReader(threading.Thread):
     def stop(self) -> None:
         self._stop_event.set()
 
+    def _resolve_port(self) -> str:
+        """Ưu tiên cổng cấu hình; nếu đổi mạch Pixhawk khác serial ID thì tự dò trong /dev/serial/by-id."""
+        if self.port and os.path.exists(self.port):
+            return self.port
+        candidates = sorted(
+            glob.glob("/dev/serial/by-id/usb-*Pixhawk*-if00")
+            + glob.glob("/dev/serial/by-id/usb-*ArduPilot*-if00")
+            + glob.glob("/dev/serial/by-id/usb-*Holybro*-if00")
+        )
+        if candidates:
+            return candidates[0]
+        if os.path.exists("/dev/ttyACM0"):
+            return "/dev/ttyACM0"
+        return self.port
+
     def run(self) -> None:
         attempt = 0
         while not self._stop_event.is_set():
             link = None
+            active_port = self._resolve_port()
             try:
+                if active_port != self.port:
+                    log.info("Cổng cấu hình %s không tồn tại, tự động dùng cổng Pixhawk thực tế: %s", self.port, active_port)
                 # Thành phần "máy tính đi kèm" trên chính drone, không giả làm trạm mặt đất.
                 link = mavutil.mavlink_connection(
-                    self.port, baud=self.baud,
+                    active_port, baud=self.baud,
                     source_system=1, source_component=mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER,
                 )
                 self.state.set_serial_open(True)
-                log.info("Đã mở cổng %s", self.port)
+                log.info("Đã mở cổng %s", active_port)
                 attempt = 0
                 self._read(link)
             except Exception as error:  # cổng bị rút, không có quyền, thiết bị chưa lên…
-                log.warning("Mất cổng MAVLink %s: %s", self.port, error)
+                log.warning("Mất cổng MAVLink %s: %s", active_port, error)
             finally:
                 self.state.set_serial_open(False)
                 if link is not None:

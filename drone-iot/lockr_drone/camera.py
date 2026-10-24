@@ -48,6 +48,9 @@ class CameraCapture:
         self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
         self.last_detected_id = None
         self.detected_id_count = 0
+        self.detected_at = None
+        self.last_marker_seen_at = None
+        self.rejected_until = 0.0
         self.lid_opened_time = None
         self.cur_x = None
         self.cur_y = None
@@ -216,8 +219,13 @@ class CameraCapture:
         # Xử lý State Machine & Debounce
         with self.lock:
             if marker_found:
+                self.last_marker_seen_at = now
                 self.cur_x, self.cur_y, self.cur_z = x, y, z
-                if self.state in ("SCANNING", "REJECTED"):
+                if self.state == "REJECTED" and now < self.rejected_until:
+                    pass
+                elif self.state in ("SCANNING", "REJECTED"):
+                    if self.state == "REJECTED":
+                        self.state = "SCANNING"
                     if found_id == self.last_detected_id:
                         self.detected_id_count += 1
                     else:
@@ -226,6 +234,7 @@ class CameraCapture:
 
                     if self.detected_id_count >= 5:  # DEBOUNCE_FRAMES
                         self.state = "DETECTED"
+                        self.detected_at = now
                         self.status_message = f"Target #{found_id} detected! Verifying with locker..."
                         if self.on_marker_detected:
                             # Gọi callback gửi MQTT ra ngoài
@@ -234,10 +243,29 @@ class CameraCapture:
                                 args=(found_id, x, y, z),
                                 daemon=True
                             ).start()
+                elif self.state == "DETECTED":
+                    if found_id != self.last_detected_id:
+                        self.last_detected_id = found_id
+                        self.detected_id_count = 1
+                        self.state = "SCANNING"
+                    elif self.detected_at is None or (now - self.detected_at) >= 4.0:
+                        self.detected_at = now
+                        if self.on_marker_detected:
+                            threading.Thread(
+                                target=self.on_marker_detected,
+                                args=(found_id, x, y, z),
+                                daemon=True
+                            ).start()
             else:
+                self.cur_x, self.cur_y, self.cur_z = None, None, None
                 if self.state == "SCANNING":
                     self.detected_id_count = 0
-                    self.cur_x, self.cur_y, self.cur_z = None, None, None
+                elif self.state == "DETECTED" and self.last_marker_seen_at and (now - self.last_marker_seen_at) >= 2.0:
+                    self.state = "SCANNING"
+                    self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
+                    self.detected_id_count = 0
+                    self.last_detected_id = None
+                    self.detected_at = None
 
             # Đếm ngược giai đoạn mở nắp
             if self.state == "LID_OPEN" and self.lid_opened_time:
@@ -362,8 +390,10 @@ class CameraCapture:
             elif event_type in ("WRONG_MARKER", "SAFETY_ABORT", "MARKER_REJECTED"):
                 err_msg = data.get("errorMessage", "Sai mã ArUco hoặc không khớp đơn")
                 self.state = "REJECTED"
+                self.detected_id_count = 0
+                self.rejected_until = time.time() + 3.0
                 self.status_message = f"REJECTED: {err_msg}"
-                threading.Timer(5.0, self._reset_scanning).start()
+                threading.Timer(4.0, self._reset_scanning).start()
             elif event_type == "LID_OPENED":
                 self.state = "LID_OPEN"
                 self.lid_opened_time = time.time()
@@ -375,11 +405,13 @@ class CameraCapture:
 
     def _reset_scanning(self):
         with self.lock:
-            self.state = "SCANNING"
-            self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
-            self.last_detected_id = None
-            self.detected_id_count = 0
-            self.cur_x, self.cur_y, self.cur_z = None, None, None
+            if self.state in ("REJECTED", "COMPLETED"):
+                self.state = "SCANNING"
+                self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
+                self.last_detected_id = None
+                self.detected_id_count = 0
+                self.detected_at = None
+                self.cur_x, self.cur_y, self.cur_z = None, None, None
 
     def _generate_fallback_jpeg(self):
         if OPENCV_AVAILABLE:
