@@ -13,6 +13,7 @@ from services.locker_service import LockerService
 from services.heartbeat_service import HeartbeatService
 from services.discovery_service import DiscoveryService
 from services.ble_service import BleAdvertiserService
+from services.control_log import ControlLog
 from utils.logger import get_logger
 
 logger = get_logger("Main")
@@ -146,11 +147,22 @@ def main():
     serial_manager.on_door_event = locker_service.handle_door_event
     serial_manager.on_reconnect = discovery_service.discover_and_report
     mqtt_wrapper.callback = locker_service.handle_incoming_message
+
+    # Nhật ký điều khiển: mọi lần kích relay và mọi lượt chạy nắp, bất kể lệnh từ đâu.
+    control_log = ControlLog(mqtt_wrapper, settings.CONTROL_LOG_FILE,
+                             locker_id=lambda: cabinet_state.primary_locker_id,
+                             box_id_for_slot=cabinet_state.box_id_for_slot)
+    if hasattr(serial_manager, "on_pulse"):
+        serial_manager.on_pulse = control_log.box_pulsed
+    for lid in lids.values():
+        lid.on_finish = control_log.lid_finished
+
     # Mỗi lần (kết nối lại) broker: báo discovery + heartbeat ngay để backend biết Pi đang online
-    # và phục vụ tủ nào (heartbeat QoS 0 gửi lúc chưa kết nối thì mất, chờ tới 60 s).
+    # và phục vụ tủ nào (heartbeat QoS 0 gửi lúc chưa kết nối thì mất, chờ tới 60 s); gửi nhật ký còn chờ.
     def _on_mqtt_connected():
         discovery_service.discover_and_report()
         heartbeat_service.publish_now()
+        control_log.wake()
     mqtt_wrapper.on_connected = _on_mqtt_connected
 
     # Start services at INFO level
@@ -160,6 +172,7 @@ def main():
     locker_service.refresh_subscriptions()
     mqtt_wrapper.start()
     heartbeat_service.start()
+    control_log.start()
 
     # 9. Khởi tạo & phát sóng BLE Beacon cho App Mobile nhận diện mở tủ
     ble_service = BleAdvertiserService(cabinet_state=cabinet_state)
@@ -176,6 +189,7 @@ def main():
     finally:
         logger.info("Shutting down...")
         ble_service.stop()
+        control_log.stop()
         heartbeat_service.stop()
         locker_service.shutdown()
         for lid in lids.values():
