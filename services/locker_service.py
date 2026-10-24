@@ -358,17 +358,40 @@ class LockerService:
         for axis in (1, 2):
             lid = self.lids.get(axis) or self.lids.get(str(axis))
             lids.append({"axis": axis, "enabled": lid is not None,
+                         "boxes": self._lid_boxes()[axis],
                          "status": lid.status() if lid else None})
         self._publish_cmd_result(cab, "panel", command_id, "SUCCESS", {"lids": lids})
 
-    def _lid_for(self, data: dict):
+    def _lid_for(self, data: dict, slot_index: Optional[int]):
         """Nắp trượt chỉ dùng khi lệnh ghi rõ `lid: true` — luồng drone thả hàng qua nóc tủ.
         Mở/đóng ô của khách, KTV, admin luôn kích relay của ô, kể cả ô drone (khách lấy hàng
-        bằng cửa trước). `lids` có khoá là số trục, không phải số ô."""
+        bằng cửa trước). `lids` có khoá là số trục, không phải số ô. Trục lấy từ `lidAxis` nếu lệnh
+        ghi rõ, không thì theo ô qua `LIDn_BOXES`; ô không thuộc trục nào ⇒ None (lệnh báo NO_LID)."""
         if not self.lids or data.get("lid") is not True:
             return None
-        axis = data.get("lidAxis", 1)
-        return self.lids.get(axis) or self.lids.get(str(axis)) or next(iter(self.lids.values()))
+        axis = data.get("lidAxis")
+        if axis is None:
+            boxes = self._lid_boxes()
+            if not any(boxes.values()):
+                return self.lids.get(1) or self.lids.get("1") or next(iter(self.lids.values()))
+            box_number = None if slot_index is None else slot_index + 1
+            axis = next((a for a, numbers in boxes.items() if box_number in numbers), None)
+            if axis is None:
+                return None
+        return self.lids.get(axis) or self.lids.get(str(axis))
+
+    @staticmethod
+    def _lid_boxes() -> dict:
+        """{trục: [số ô]} mà nắp của trục nằm trên — `LID1_BOXES`, `LID2_BOXES` trong .env của Pi."""
+        return {1: list(getattr(settings, "LID1_BOXES", None) or []),
+                2: list(getattr(settings, "LID2_BOXES", None) or [])}
+
+    def _no_lid(self, cab: dict, action: str, command_id, slot_index: int, box_id):
+        """Lệnh drone cần nắp mà ô không có nắp: báo lỗi, không kích relay cửa trước thay vào."""
+        logger.error(f"{action.upper()} {command_id}: ô {slot_index + 1} không có nắp trượt")
+        self._publish_result(cab, action, command_id, slot_index, box_id, "FAILED",
+                             LockerHwState.UNKNOWN.value, "NO_LID",
+                             f"Ô {slot_index + 1} không có nắp trượt (LID1_BOXES/LID2_BOXES trên Pi)")
 
     def _resolve_slot(self, cab: dict, data: dict):
         """(slotIndex, boxId) của lệnh: slotIndex nếu backend gửi, không thì tra boxId trong sơ đồ."""
@@ -419,7 +442,10 @@ class LockerService:
                                  LockerHwState.UNKNOWN.value, "HW_ERROR", "Hardware not available")
             return
 
-        lid = self._lid_for(data)
+        lid = self._lid_for(data, slot_index)
+        if data.get("lid") is True and lid is None:
+            self._no_lid(cab, "open", command_id, slot_index, box_id)
+            return
         if lid:
             logger.warning(f"🚀 SLIDING LID OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
             if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True):
@@ -474,7 +500,10 @@ class LockerService:
             logger.error("Serial not available")
             return
 
-        lid = self._lid_for(data)
+        lid = self._lid_for(data, slot_index)
+        if data.get("lid") is True and lid is None:
+            self._no_lid(cab, "close", command_id, slot_index, box_id)
+            return
         if lid:
             logger.warning(f"🔒 SLIDING LID CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
             if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True):

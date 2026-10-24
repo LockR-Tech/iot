@@ -148,6 +148,31 @@ class OpenRoutingTest(unittest.TestCase):
         self.assertIn("hardware bypass", r["errorMessage"])
         self.assertEqual(self.relay_pulses(), [])
 
+    def test_lid_follows_box_mapping(self):
+        # CAB-TU01: nắp trục 1 nằm trên ô 3 (slot 2).
+        with mock.patch.object(settings, "LID1_BOXES", [3]):
+            self.send({"commandId": "d-3", "boxId": 40, "slotIndex": 2, "action": "OPEN", "lid": True})
+            r = self.mqtt.on("cabinet/7/command/open/result")[-1]
+            self.assertEqual(r["status"], "SUCCESS")
+            self.assertIn("hardware bypass", r["errorMessage"])
+
+            # Drone tới ô 2 (không có nắp): báo lỗi, không mở nhầm nắp ô 3, không kích relay cửa trước.
+            self.send({"commandId": "d-2", "boxId": 39, "slotIndex": 1, "action": "OPEN", "lid": True})
+            r = self.mqtt.on("cabinet/7/command/open/result")[-1]
+            self.assertEqual(r["status"], "FAILED")
+            self.assertEqual(r["errorCode"], "NO_LID")
+            self.assertEqual(self.relay_pulses(), [])
+
+            # Mở ô 3 bình thường (khách lấy hàng) vẫn kích relay cửa trước.
+            self.send({"commandId": "o-3", "boxId": 40, "slotIndex": 2, "action": "OPEN"})
+            self.assertEqual(self.mqtt.on("cabinet/7/command/open/result")[-1]["errorMessage"], "Door opened")
+            self.assertEqual(self.relay_pulses(), [RELAYS[2]])
+
+            self.service.handle_incoming_message("cabinet/7/command/panel", json.dumps({"commandId": "p-1"}))
+            self.service._executor.submit(lambda: None).result(timeout=5)
+            panel = self.mqtt.on("cabinet/7/command/panel/result")[-1]
+            self.assertEqual([(l["axis"], l["boxes"]) for l in panel["lids"]], [(1, [3]), (2, [])])
+
 
 if __name__ == "__main__":
     unittest.main()
