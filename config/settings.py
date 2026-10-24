@@ -105,7 +105,7 @@ class Settings:
     # Tốc độ/xung chỉnh trên bảng điều khiển kỹ thuật, ghi đè LID_* (riêng từng Pi, không commit).
     LID_TUNING_FILE = os.getenv("LID_TUNING_FILE", str(Path(__file__).parent / "lid_tuning.json"))
     # Bỏ qua phát xung vật lý cho nắp trượt khi nhận lệnh MQTT (chỉ gửi log & bản tin kết quả MQTT)
-    LID_BYPASS_PHYSICAL_MOTION = _env_bool("LID_BYPASS_PHYSICAL_MOTION", True)
+    LID_BYPASS_PHYSICAL_MOTION = _env_bool("LID_BYPASS_PHYSICAL_MOTION", False)
 
     # ─── Hardware ───
     TOTAL_SLOTS = int(os.getenv("TOTAL_SLOTS", 24))

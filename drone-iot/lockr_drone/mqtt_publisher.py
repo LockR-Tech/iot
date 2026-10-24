@@ -123,7 +123,7 @@ class MqttPublisher:
             return False
         try:
             body = json.dumps(payload, ensure_ascii=False)
-            info = self.client.publish(self._delivery_events_topic, body, qos=1)
+            info = self.client.publish(self._delivery_events_topic, body, qos=1, properties=self._signed(self._delivery_events_topic, body))
             return info.rc == mqtt.MQTT_ERR_SUCCESS
         except Exception as e:
             log.warning("Lỗi gửi delivery event lên MQTT: %s", e)
