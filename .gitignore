@@ -14,3 +14,5 @@ wheels/
 config/cabinet_state.json
 # Tốc độ/xung nắp trượt chỉnh trên bảng điều khiển kỹ thuật (/service)
 config/lid_tuning.json
+# Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend
+config/control_log_outbox.jsonl*

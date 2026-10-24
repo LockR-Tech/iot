@@ -101,9 +101,16 @@ class Settings:
     LID2_END_PIN = int(os.getenv("LID2_END_PIN", 8))
     LID2_OPEN_DIR_HIGH = _env_bool("LID2_OPEN_DIR_HIGH", True)
     LID2_LIMIT_ACTIVE_LOW = _env_bool("LID2_LIMIT_ACTIVE_LOW", LID_LIMIT_ACTIVE_LOW)
+    # Nắp của trục nằm trên ô nào (số ô in trên cửa, cách nhau dấu phẩy), ví dụ LID1_BOXES=3.
+    # Lệnh drone `lid: true` cho ô không thuộc trục nào ⇒ Pi báo NO_LID, không mở nhầm nắp.
+    # Cả hai để trống ⇒ mọi lệnh drone dùng trục 1 (như trước).
+    LID1_BOXES = _env_int_list("LID1_BOXES", "")
+    LID2_BOXES = _env_int_list("LID2_BOXES", "")
 
     # Tốc độ/xung chỉnh trên bảng điều khiển kỹ thuật, ghi đè LID_* (riêng từng Pi, không commit).
     LID_TUNING_FILE = os.getenv("LID_TUNING_FILE", str(Path(__file__).parent / "lid_tuning.json"))
+    # Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend — giữ qua mất mạng và khởi động lại.
+    CONTROL_LOG_FILE = os.getenv("CONTROL_LOG_FILE", str(Path(__file__).parent / "control_log_outbox.jsonl"))
     # Bỏ qua phát xung vật lý cho nắp trượt khi nhận lệnh MQTT (chỉ gửi log & bản tin kết quả MQTT)
     LID_BYPASS_PHYSICAL_MOTION = _env_bool("LID_BYPASS_PHYSICAL_MOTION", False)
 

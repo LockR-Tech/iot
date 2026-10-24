@@ -20,7 +20,7 @@ Chưa có lệnh MQTT nào cho nắp (gap F1.06) — điều khiển qua API c�
 import threading
 import time
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
 from hardware.gpio_pins import PinGroup, PinIO
 from utils.logger import get_logger
@@ -98,6 +98,9 @@ class LidController:
         self.motion: Optional[str] = None        # lệnh đang chạy: open/close/home/jog
         self.progress = 0                        # số bước đã chạy của lệnh hiện tại
         self.target_steps: Optional[int] = None  # số bước dự định (lệnh jog)
+        self._toward_end = True                  # chiều của lệnh đang chạy (jog không tự ghi trong motion)
+        # Gọi khi mỗi lượt chạy kết thúc: on_finish(axis, last_result) — nhật ký điều khiển tủ.
+        self.on_finish: Optional[Callable[[int, dict], None]] = None
 
     def start(self) -> "LidController":
         idle = self.step_active_low          # không có xung: opto tắt
@@ -261,6 +264,7 @@ class LidController:
             self._abort.clear()
             self.last_error = None
             self.motion, self.progress, self.target_steps = motion, 0, step_budget
+            self._toward_end = toward_end
             if limit_reached():
                 self._reached(target)
                 return self._finish({"result": "OK", "state": self.state.value, "steps": 0}, 0)
@@ -308,7 +312,13 @@ class LidController:
     def _finish(self, result: dict, steps: int) -> dict:
         self.last_steps = steps
         self.last_result = {**result, "action": self.motion,
+                            "direction": "open" if self._toward_end else "close",
                             "revolutions": round(steps / self.steps_per_rev, 2)}
+        if self.on_finish:
+            try:
+                self.on_finish(self.axis, dict(self.last_result))
+            except Exception as e:
+                logger.error(f"Lid {self.axis} on_finish failed: {e}")
         return result
 
     def _interval(self, step_index: int) -> float:

@@ -358,11 +358,16 @@ class LockerService:
         for axis in (1, 2):
             lid = self.lids.get(axis) or self.lids.get(str(axis))
             lids.append({"axis": axis, "enabled": lid is not None,
+                         "boxes": self._lid_boxes()[axis],
                          "status": lid.status() if lid else None})
         self._publish_cmd_result(cab, "panel", command_id, "SUCCESS", {"lids": lids})
 
-    def _find_lid(self, slot_index: Optional[int]):
-        if not self.lids or slot_index is None:
+    def _lid_for(self, data: dict, slot_index: Optional[int]):
+        """Nắp trượt chỉ dùng khi lệnh ghi rõ `lid: true` — luồng drone thả hàng qua nóc tủ.
+        Mở/đóng ô của khách, KTV, admin luôn kích relay của ô, kể cả ô drone (khách lấy hàng
+        bằng cửa trước). `lids` có khoá là số trục, không phải số ô. Trục lấy từ `lidAxis` nếu lệnh
+        ghi rõ, không thì theo ô qua `LIDn_BOXES`; ô không thuộc trục nào ⇒ None (lệnh báo NO_LID)."""
+        if not self.lids or data.get("lid") is not True:
             return None
         if slot_index in self.lids:
             return self.lids[slot_index]
@@ -421,7 +426,10 @@ class LockerService:
                                  LockerHwState.UNKNOWN.value, "HW_ERROR", "Hardware not available")
             return
 
-        lid = self._find_lid(slot_index)
+        lid = self._lid_for(data, slot_index)
+        if data.get("lid") is True and lid is None:
+            self._no_lid(cab, "open", command_id, slot_index, box_id)
+            return
         if lid:
             logger.warning(f"🚀 SLIDING LID OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
             if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", False):
@@ -476,7 +484,10 @@ class LockerService:
             logger.error("Serial not available")
             return
 
-        lid = self._find_lid(slot_index)
+        lid = self._lid_for(data, slot_index)
+        if data.get("lid") is True and lid is None:
+            self._no_lid(cab, "close", command_id, slot_index, box_id)
+            return
         if lid:
             logger.warning(f"🔒 SLIDING LID CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
             if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", False):

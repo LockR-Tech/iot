@@ -26,3 +26,10 @@ def device_key(master_secret: str, drone_id: str) -> str:
 
 def sign(key: str, topic: str, payload: str) -> str:
     return _hmac_hex(key, topic + "\n" + payload)
+
+
+def verify(key: str, topic: str, payload: str, signature: str | None) -> bool:
+    """Bản tin (vd. lệnh giao hàng từ backend) có đúng chữ ký của khoá drone này không."""
+    if not key or not signature:
+        return False
+    return hmac.compare_digest(sign(key, topic, payload), signature.strip().lower())
