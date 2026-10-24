@@ -16,3 +16,5 @@ config/cabinet_state.json
 config/lid_tuning.json
 # Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend
 config/control_log_outbox.jsonl*
+# Khoá công khai kiểm mã mở ô qua Bluetooth, tải từ backend
+config/ble_public_key.json*

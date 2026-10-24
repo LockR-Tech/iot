@@ -134,6 +134,10 @@ class GpioLockerManager:
         # Firmware: lệnh T và O cùng một xung relay, chỉ khác mục đích gọi.
         return self._pulse(slot_index, slave_id, "TEST")
 
+    def ble_open_slot(self, slot_index: int) -> dict:
+        """Mở ngăn theo mã Bluetooth (F3-G11) — BleGattService tự ghi nhật ký kèm tài khoản."""
+        return self._pulse(slot_index, self.slave_id, "BLE")
+
     def pulse_slot(self, slot_index: int, unlock_ms: int) -> dict:
         """Mở ngăn với thời gian kích riêng — bảng điều khiển kỹ thuật."""
         return self._pulse(slot_index, self.slave_id, "SERVICE", unlock_ms=unlock_ms)

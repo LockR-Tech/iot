@@ -132,6 +132,8 @@ class ControlLog:
 
     def box_pulsed(self, slot_index: int, label: str, unlock_ms: int, result: dict):
         """Gắn vào `GpioLockerManager.on_pulse`: mỗi lần kích relay mở ô."""
+        if label == "BLE":
+            return  # BleGattService ghi dòng BOX_OPEN_BLE riêng, có tài khoản mở
         ok = result.get("result") == "OK"
         action = "BOX_TEST" if label == "TEST" else "BOX_OPEN"
         message = f"Kích relay ô {slot_index + 1} trong {unlock_ms} ms ({_PULSE_SOURCE.get(label, label)})"
