@@ -361,16 +361,14 @@ class LockerService:
                          "status": lid.status() if lid else None})
         self._publish_cmd_result(cab, "panel", command_id, "SUCCESS", {"lids": lids})
 
-    def _find_lid(self, slot_index: Optional[int]):
-        if not self.lids or slot_index is None:
+    def _lid_for(self, data: dict):
+        """Nắp trượt chỉ dùng khi lệnh ghi rõ `lid: true` — luồng drone thả hàng qua nóc tủ.
+        Mở/đóng ô của khách, KTV, admin luôn kích relay của ô, kể cả ô drone (khách lấy hàng
+        bằng cửa trước). `lids` có khoá là số trục, không phải số ô."""
+        if not self.lids or data.get("lid") is not True:
             return None
-        if slot_index in self.lids:
-            return self.lids[slot_index]
-        if str(slot_index) in self.lids:
-            return self.lids[str(slot_index)]
-        if len(self.lids) == 1 and (slot_index == 1 or 1 in self.lids):
-            return self.lids.get(1) or list(self.lids.values())[0]
-        return None
+        axis = data.get("lidAxis", 1)
+        return self.lids.get(axis) or self.lids.get(str(axis)) or next(iter(self.lids.values()))
 
     def _resolve_slot(self, cab: dict, data: dict):
         """(slotIndex, boxId) của lệnh: slotIndex nếu backend gửi, không thì tra boxId trong sơ đồ."""
@@ -421,7 +419,7 @@ class LockerService:
                                  LockerHwState.UNKNOWN.value, "HW_ERROR", "Hardware not available")
             return
 
-        lid = self._find_lid(slot_index)
+        lid = self._lid_for(data)
         if lid:
             logger.warning(f"🚀 SLIDING LID OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
             if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True):
@@ -476,7 +474,7 @@ class LockerService:
             logger.error("Serial not available")
             return
 
-        lid = self._find_lid(slot_index)
+        lid = self._lid_for(data)
         if lid:
             logger.warning(f"🔒 SLIDING LID CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
             if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", True):
