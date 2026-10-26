@@ -126,6 +126,7 @@ class DroneLidCommandTest(unittest.TestCase):
     # ─── 5. nắp đã mở ⇒ lệnh mới không kích motor ───
 
     def test_lid_already_open_does_not_trigger_the_motor(self):
+        self.lid_pins.levels[END] = False
         self.send("open", "drone-5a")
         pulses = self.motor_pulses()
 
@@ -166,6 +167,16 @@ class DroneLidCommandTest(unittest.TestCase):
         last = self.results("open", "drone-6c")[-1]
         self.assertEqual(last["status"], "FAILED")
         self.assertEqual(last["errorCode"], "LIMIT_NOT_REACHED")
+
+    def test_required_switch_rejects_stale_open_state_without_sensor_confirmation(self):
+        self.lid.state = self.lid.state.__class__("OPEN")
+        with mock.patch.object(settings, "LID_REQUIRE_LIMIT_SWITCH", True):
+            self.send("open", "drone-stale-open")
+
+        (result,) = self.results("open", "drone-stale-open")
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["errorCode"], "LIMIT_NOT_REACHED")
+        self.assertEqual(self.motor_pulses(), 0)
 
     def test_bypass_mode_says_so_instead_of_claiming_a_real_open(self):
         with mock.patch.object(settings, "LID_BYPASS_PHYSICAL_MOTION", True):

@@ -514,6 +514,9 @@ class LockerService:
         limit_check = getattr(lid, "at_end" if action == "open" else "at_home", None)
         at_limit = bool(limit_check()) if callable(limit_check) else bool(limit_check)
         if not getattr(lid, "busy", False) and current == target:
+            if settings.LID_REQUIRE_LIMIT_SWITCH and not at_limit:
+                return finish("FAILED", LockerHwState.UNKNOWN.value, "LIMIT_NOT_REACHED",
+                              f"Trạng thái lưu của nắp là {verb} nhưng công tắc hành trình chưa xác nhận")
             return finish("SUCCESS", target, None, f"Nắp trượt đã ở vị trí {verb} — không chạy motor lại",
                           {"alreadyInPosition": True, "lidConfirmation": confirmation(bool(at_limit))})
 
@@ -527,12 +530,14 @@ class LockerService:
                           {"lidConfirmation": "BYPASS"})
 
         result = lid.open() if action == "open" else lid.close()
-        ok = result.get("result") == "OK"
+        step_count_only = (result.get("error") == "LIMIT_NOT_REACHED"
+                           and not settings.LID_REQUIRE_LIMIT_SWITCH)
+        ok = result.get("result") == "OK" or step_count_only
         if not ok:
             error_code = result.get("error") or "LID_JAMMED"
             return finish("FAILED", (lid.status() or {}).get("state", LockerHwState.UNKNOWN.value), error_code,
                           f"{verb.capitalize()} nắp trượt ô tủ thất bại: {error_code}")
-        reached_limit = (lid.status() or {}).get("lastError") != "LIMIT_NOT_REACHED"
+        reached_limit = bool(limit_check()) if callable(limit_check) else bool(limit_check)
         if not reached_limit and settings.LID_REQUIRE_LIMIT_SWITCH:
             return finish("FAILED", LockerHwState.UNKNOWN.value, "LIMIT_NOT_REACHED",
                           f"Nắp chạy hết số bước nhưng không chạm công tắc hành trình — chưa xác nhận đã {verb}")
