@@ -47,6 +47,16 @@ class Settings:
     mqtt_ca_certs: str = ""
     # Khoá ký bản tin của riêng drone này (bí mật) — xem signing.py.
     device_key: str = ""
+    # ─── ArUco → mở nắp tủ (xem delivery.py) ───
+    aruco_dictionary: str = "DICT_4X4_50"     # phải trùng từ điển của ô đích (backend gửi kèm mục tiêu)
+    aruco_marker_size_m: float = 0.08         # cạnh marker in trên nắp ô, để ước lượng khoảng cách
+    aruco_stable_frames: int = 5              # số frame liên tiếp phải thấy đúng mã
+    aruco_stable_seconds: float = 0.6         # và thấy liên tục ít nhất chừng này giây
+    aruco_lost_reset_s: float = 1.0           # mất dấu quá chừng này giây thì đếm lại
+    delivery_response_timeout_s: float = 15.0  # chờ backend trả lời MARKER_DETECTED
+    delivery_max_requests: int = 3            # số lần gửi MARKER_DETECTED tối đa mỗi lần tiếp cận
+    delivery_lid_timeout_s: float = 180.0     # chờ tủ báo nắp đã mở sau khi backend đã gửi lệnh
+    target_poll_s: float = 10.0               # chưa có nhiệm vụ: hỏi backend mỗi chừng này giây
 
     @staticmethod
     def from_env() -> "Settings":
@@ -67,6 +77,15 @@ class Settings:
             mqtt_password=os.getenv("MQTT_PASSWORD", ""),
             mqtt_ca_certs=os.getenv("MQTT_CA_CERTS", "").strip(),
             device_key=os.getenv("DEVICE_KEY", "").strip(),
+            aruco_dictionary=os.getenv("ARUCO_DICTIONARY", "DICT_4X4_50").strip().upper(),
+            aruco_marker_size_m=_float("ARUCO_MARKER_SIZE_M", 0.08),
+            aruco_stable_frames=int(os.getenv("ARUCO_STABLE_FRAMES", 5)),
+            aruco_stable_seconds=_float("ARUCO_STABLE_SECONDS", 0.6),
+            aruco_lost_reset_s=_float("ARUCO_LOST_RESET_S", 1.0),
+            delivery_response_timeout_s=_float("DELIVERY_RESPONSE_TIMEOUT_S", 15),
+            delivery_max_requests=int(os.getenv("DELIVERY_MAX_REQUESTS", 3)),
+            delivery_lid_timeout_s=_float("DELIVERY_LID_TIMEOUT_S", 180),
+            target_poll_s=_float("TARGET_POLL_S", 10),
         )
 
     def problems(self, mqtt: bool = True) -> list[str]:

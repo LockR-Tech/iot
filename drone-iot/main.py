@@ -19,6 +19,7 @@ from lockr_drone.mavlink_reader import MavlinkReader
 from lockr_drone.state import DroneState
 from lockr_drone.telemetry import build_payload, link_state
 from lockr_drone.camera import CameraStreamerServer
+from lockr_drone.delivery import DeliveryTracker
 
 log = logging.getLogger("bridge")
 SUMMARY_EVERY_S = 60
@@ -51,28 +52,30 @@ def main() -> int:
         from lockr_drone.mqtt_publisher import MqttPublisher
         publisher = MqttPublisher(settings)
 
-    def on_marker_detected(marker_id, x, y, z):
-        session_id = f"session-{uuid.uuid4().hex[:8]}"
-        payload = {
-            "messageId": str(uuid.uuid4()),
-            "correlationId": str(uuid.uuid4()),
-            "sessionId": session_id,
-            "eventType": "MARKER_DETECTED",
-            "droneId": settings.drone_id,
-            "arucoDictionary": "DICT_4X4_50",
-            "arucoMarkerId": int(marker_id),
-            "mode": "INDOOR_ARUCO_DEMO",
-            "distanceM": round(z, 3) if z is not None else 0.8,
-            "offsetX": round(x, 3) if x is not None else 0.0,
-            "offsetY": round(y, 3) if y is not None else 0.0,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        if publisher:
-            success = publisher.publish_delivery_event(payload)
-            if success:
-                log.info("🚀 Đã phát MARKER_DETECTED cho ArUco #%s lên MQTT: %s", marker_id, payload)
-            else:
-                log.warning("Không thể gửi MARKER_DETECTED (MQTT chưa kết nối)")
+    # Chỉ xin mở nắp khi có nhiệm vụ và camera thấy ĐÚNG mã ô đích ổn định (xem lockr_drone/delivery.py).
+    tracker = DeliveryTracker(
+        settings.drone_id,
+        dictionary=settings.aruco_dictionary,
+        stable_frames=settings.aruco_stable_frames,
+        stable_seconds=settings.aruco_stable_seconds,
+        lost_reset_s=settings.aruco_lost_reset_s,
+        response_timeout_s=settings.delivery_response_timeout_s,
+        lid_timeout_s=settings.delivery_lid_timeout_s,
+        max_requests=settings.delivery_max_requests,
+        target_poll_s=settings.target_poll_s,
+    )
+
+    def publish_delivery(payload: dict) -> None:
+        if publisher is None:
+            print(json.dumps(payload, ensure_ascii=False), flush=True)
+            return
+        if publisher.publish_delivery_event(payload):
+            log.info("Đã gửi %s (mission=%s order=%s locker=%s aruco=%s)", payload.get("eventType"),
+                     payload.get("missionId"), payload.get("orderId"), payload.get("lockerId"),
+                     payload.get("arucoMarkerId"))
+        else:
+            log.warning("Không gửi được %s (MQTT chưa kết nối) — sẽ thử lại theo hẹn giờ",
+                        payload.get("eventType"))
 
     # Khởi động camera streamer ngầm tích hợp ArUco Vision (phát tại /stream.mjpg và /api/status)
     camera_server = None
@@ -81,12 +84,14 @@ def main() -> int:
             port=args.camera_port,
             state=state,
             settings=settings,
-            on_marker_detected=on_marker_detected
+            on_marker_detected=publish_delivery,
+            tracker=tracker,
         )
         camera_server.start()
 
     if publisher is not None:
-        publisher.delivery_command_listener = lambda cmd: camera_server.handle_delivery_command(cmd) if camera_server else None
+        publisher.delivery_command_listener = tracker.handle_command
+        publisher.on_connected = tracker.request_target_now
         publisher.start()
 
     reader = MavlinkReader(state, settings.mavlink_port, settings.mavlink_baud, settings.message_rate_hz)
@@ -96,6 +101,11 @@ def main() -> int:
     last_summary = time.monotonic()
     try:
         while not stop.wait(settings.publish_interval_s):
+            tracker.tick()
+            if publisher is not None and publisher.connected:
+                request = tracker.due_target_request()
+                if request:
+                    publish_delivery(request)
             sequence += 1
             snapshot = state.snapshot()
             payload = build_payload(

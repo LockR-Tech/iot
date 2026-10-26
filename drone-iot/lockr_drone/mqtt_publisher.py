@@ -52,6 +52,8 @@ class MqttPublisher:
         self._delivery_commands_topic = "lockr/drone/delivery/commands"
         self._delivery_events_topic = "lockr/drone/delivery/events"
         self.delivery_command_listener = None
+        # Gọi mỗi lần (kết nối lại) broker — main.py dùng để hỏi lại mục tiêu giao hàng ngay.
+        self.on_connected = None
 
         transport = "websockets" if settings.mqtt_transport == "websockets" else "tcp"
         self.client = mqtt.Client(
@@ -108,6 +110,8 @@ class MqttPublisher:
             log.info("Đã subscribe topic nhận lệnh giao hàng: %s", self._delivery_commands_topic)
         except Exception as e:
             log.warning("Không thể subscribe topic lệnh %s: %s", self._delivery_commands_topic, e)
+        if self.on_connected:
+            self.on_connected()
 
     def _on_message(self, client, userdata, message):
         try:

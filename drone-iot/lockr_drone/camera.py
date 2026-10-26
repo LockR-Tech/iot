@@ -1,7 +1,8 @@
 """Camera Streamer tích hợp AI thị giác ArUco cho Drone (MJPEG Stream).
 Hỗ trợ cả Raspberry Pi CSI Camera (Picamera2 trên Pi 5) và USB Camera (OpenCV V4L2).
 Tự động phát video tại http://0.0.0.0:8080/stream.mjpg cho Web Admin xem trực tiếp kèm HUD nhận diện.
-Tự động quét mã ArUco ô tủ (DICT_4X4_50, 8x8cm) và gửi sự kiện MQTT để kích hoạt mở nắp tủ.
+Mỗi frame: dò mọi mã ArUco, chuyển cho `DeliveryTracker` — chỉ mã của ô đích trong nhiệm vụ đang giao,
+ổn định đủ lâu, mới thành MARKER_DETECTED gửi backend (backend gửi lệnh mở nắp trượt cho tủ).
 """
 import io
 import json
@@ -14,9 +15,6 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 log = logging.getLogger("camera")
-
-# Đã được xác thực mã mà chừng này giây chưa thấy nắp mở thì quét lại.
-VALIDATED_TIMEOUT_S = 30.0
 
 try:
     from picamera2 import Picamera2
@@ -33,7 +31,8 @@ except Exception:
 
 
 class CameraCapture:
-    def __init__(self, device_index=0, width=640, height=480, fps=20, on_marker_detected=None):
+    def __init__(self, device_index=0, width=640, height=480, fps=20, on_marker_detected=None,
+                 tracker=None, dictionary="DICT_4X4_50", marker_size_m=0.08):
         self.device_index = device_index
         self.width = width
         self.height = height
@@ -44,18 +43,16 @@ class CameraCapture:
         self.current_frame = None
         self.running = False
         self.mode = "none"
+        # on_marker_detected(payload): gửi bản tin MARKER_DETECTED mà tracker quyết định.
         self.on_marker_detected = on_marker_detected
+        self.tracker = tracker
+        self.dictionary_name = dictionary
+        self.marker_size_m = marker_size_m
 
-        # Trạng thái ArUco AI Vision & HUD
-        self.state = "SCANNING"  # SCANNING, DETECTED, VALIDATED, LID_OPEN, COMPLETED, REJECTED
-        self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
+        # Trạng thái hiển thị (đọc từ tracker mỗi frame) & HUD
+        self.state = tracker.state if tracker else "NO_TARGET"
+        self.status_message = tracker.message if tracker else "Chưa có bộ theo dõi nhiệm vụ"
         self.last_detected_id = None
-        self.detected_id_count = 0
-        self.detected_at = None
-        self.last_marker_seen_at = None
-        self.rejected_until = 0.0
-        self.lid_opened_time = None
-        self.validated_at = None
         self.cur_x = None
         self.cur_y = None
         self.cur_z = None
@@ -71,11 +68,11 @@ class CameraCapture:
         if not OPENCV_AVAILABLE:
             return
         try:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+            dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, self.dictionary_name))
             parameters = cv2.aruco.DetectorParameters()
             self.detector = cv2.aruco.ArucoDetector(dictionary, parameters)
 
-            marker_size_m = 0.08  # 8x8 cm chuẩn của ô tủ
+            marker_size_m = self.marker_size_m  # cạnh marker in trên ô tủ (ARUCO_MARKER_SIZE_M)
             half = marker_size_m / 2.0
             self.object_points = np.array([
                 [-half,  half, 0.0],
@@ -101,7 +98,7 @@ class CameraCapture:
                     [0, 0, 1]
                 ], dtype=np.float32)
                 self.dist_coeffs = np.zeros((4, 1), dtype=np.float32)
-            log.info("Khởi tạo bộ nhận diện ArUco DICT_4X4_50 thành công")
+            log.info("Khởi tạo bộ nhận diện ArUco %s thành công", self.dictionary_name)
         except Exception as e:
             log.warning("Không thể khởi tạo ArUco detector: %s", e)
             self.detector = None
@@ -184,10 +181,7 @@ class CameraCapture:
             time.sleep(1.0 / self.fps)
 
     def _process_frame_and_annotate(self, frame_bgr):
-        now = time.time()
-        marker_found = False
-        found_id = None
-        x, y, z = None, None, None
+        detections = []          # [(id, (x, y, z))] — mọi marker thấy trong frame
         corners = None
         ids = None
 
@@ -195,100 +189,39 @@ class CameraCapture:
             try:
                 gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
                 corners, ids, _ = self.detector.detectMarkers(gray)
-
                 if ids is not None and len(ids) > 0:
-                    for i in range(len(ids)):
-                        c = corners[i]
-                        mid = int(ids[i][0])
+                    # OpenCV 4: ids (N,1), corners[i] (1,4,2); OpenCV 5: ids (N,), corners[i] (4,2).
+                    flat_ids = np.asarray(ids).reshape(-1)
+                    for i in range(len(flat_ids)):
                         ok, rvec, tvec = cv2.solvePnP(
                             self.object_points,
-                            c[0],
+                            np.asarray(corners[i], dtype=np.float32).reshape(4, 2),
                             self.camera_matrix,
                             self.dist_coeffs,
                             flags=cv2.SOLVEPNP_IPPE_SQUARE
                         )
-                        if ok:
-                            cam_x = float(tvec[0][0])
-                            cam_y = float(tvec[1][0])
-                            cam_z = float(tvec[2][0])
-                            x = -cam_y
-                            y = cam_x
-                            z = cam_z
-                            marker_found = True
-                            found_id = mid
-                            break
+                        # OpenCV 4 trả tvec (3,1), OpenCV 5 trả (3,) — làm phẳng cho cả hai.
+                        t = np.asarray(tvec, dtype=float).reshape(-1) if ok else None
+                        pose = (-float(t[1]), float(t[0]), float(t[2])) if ok else None
+                        detections.append((int(flat_ids[i]), pose))
             except Exception as e:
                 log.debug("Lỗi xử lý ArUco: %s", e)
 
-        # Xử lý State Machine & Debounce
+        # Quyết định gửi nằm trong tracker: đúng mã ô đích, ổn định đủ lâu, một lần mỗi lần tiếp cận.
+        payload = self.tracker.observe(detections) if self.tracker else None
+        if payload and self.on_marker_detected:
+            threading.Thread(target=self.on_marker_detected, args=(payload,), daemon=True).start()
+
+        target_id = self.tracker.target.marker_id if self.tracker and self.tracker.target else None
+        shown = next((d for d in detections if d[0] == target_id), detections[0] if detections else None)
         with self.lock:
-            if marker_found:
-                self.last_marker_seen_at = now
-                self.cur_x, self.cur_y, self.cur_z = x, y, z
-                if self.state == "REJECTED" and now < self.rejected_until:
-                    pass
-                elif self.state in ("SCANNING", "REJECTED"):
-                    if self.state == "REJECTED":
-                        self.state = "SCANNING"
-                    if found_id == self.last_detected_id:
-                        self.detected_id_count += 1
-                    else:
-                        self.last_detected_id = found_id
-                        self.detected_id_count = 1
-
-                    if self.detected_id_count >= 5:  # DEBOUNCE_FRAMES
-                        self.state = "DETECTED"
-                        self.detected_at = now
-                        self.status_message = f"Target #{found_id} detected! Verifying with locker..."
-                        if self.on_marker_detected:
-                            # Gọi callback gửi MQTT ra ngoài
-                            threading.Thread(
-                                target=self.on_marker_detected,
-                                args=(found_id, x, y, z),
-                                daemon=True
-                            ).start()
-                elif self.state == "DETECTED":
-                    if found_id != self.last_detected_id:
-                        self.last_detected_id = found_id
-                        self.detected_id_count = 1
-                        self.state = "SCANNING"
-                    elif self.detected_at is None or (now - self.detected_at) >= 4.0:
-                        self.detected_at = now
-                        if self.on_marker_detected:
-                            threading.Thread(
-                                target=self.on_marker_detected,
-                                args=(found_id, x, y, z),
-                                daemon=True
-                            ).start()
-            else:
-                self.cur_x, self.cur_y, self.cur_z = None, None, None
-                if self.state == "SCANNING":
-                    self.detected_id_count = 0
-                elif self.state == "DETECTED" and self.last_marker_seen_at and (now - self.last_marker_seen_at) >= 2.0:
-                    self.state = "SCANNING"
-                    self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
-                    self.detected_id_count = 0
-                    self.last_detected_id = None
-                    self.detected_at = None
-
-            # Chờ nắp quá lâu (bản tin LID_OPENED / LID_OPEN_FAILED bị mất, tủ mất kết nối): quét lại để gửi
-            # MARKER_DETECTED lần nữa — backend trả MARKER_VALIDATED nếu phiên còn chờ, hoặc mở phiên mới.
-            if self.state == "VALIDATED" and self.validated_at and (now - self.validated_at) >= VALIDATED_TIMEOUT_S:
-                self.state = "SCANNING"
-                self.status_message = "No lid response from locker. Re-scanning ArUco marker..."
-                self.detected_id_count = 0
-                self.last_detected_id = None
-                self.detected_at = None
-                self.validated_at = None
-
-            # Đếm ngược giai đoạn mở nắp
-            if self.state == "LID_OPEN" and self.lid_opened_time:
-                elapsed = now - self.lid_opened_time
-                remaining = max(0, 7.0 - elapsed)
-                if remaining > 0:
-                    self.status_message = f"Locker lid is OPEN! Cargo drop: {remaining:.1f}s..."
-                else:
-                    self.status_message = "Cargo drop completed! Locker lid closing..."
+            self.last_detected_id = shown[0] if shown else None
+            pose = shown[1] if shown else None
+            self.cur_x, self.cur_y, self.cur_z = pose if pose else (None, None, None)
+            if self.tracker:
+                self.state = self.tracker.state
+                self.status_message = self.tracker.message
+        found_id = self.last_detected_id
 
         # Vẽ HUD trực tiếp lên khung hình xem live
         draw_frame = frame_bgr.copy()
@@ -329,12 +262,15 @@ class CameraCapture:
 
         # 3. Top-Right: Clean Status Pill
         state_configs = {
-            "SCANNING":  ("SCANNING",        (0, 215, 255)),   # Amber
-            "DETECTED":  ("TARGET DETECTED", (0, 255, 255)),   # Yellow
-            "VALIDATED": ("TARGET VERIFIED", (0, 255, 0)),     # Green
-            "LID_OPEN":  ("LID OPEN",        (255, 180, 50)),  # Light Blue
-            "COMPLETED": ("COMPLETED",       (0, 255, 0)),     # Green
-            "REJECTED":  ("REJECTED",        (0, 0, 255)),     # Red
+            "NO_TARGET":    ("NO MISSION",       (160, 160, 160)), # Grey
+            "SCANNING":     ("SCANNING",         (0, 215, 255)),   # Amber
+            "STABILIZING":  ("TARGET LOCKING",   (0, 255, 255)),   # Yellow
+            "REQUEST_SENT": ("REQUEST SENT",     (0, 255, 255)),   # Yellow
+            "VALIDATED":    ("TARGET VERIFIED",  (0, 255, 0)),     # Green
+            "LID_OPENING":  ("LID OPENING",      (255, 180, 50)),  # Light Blue
+            "LID_OPEN":     ("LID OPEN",         (255, 180, 50)),  # Light Blue
+            "COMPLETED":    ("COMPLETED",        (0, 255, 0)),     # Green
+            "FAILED":       ("FAILED",           (0, 0, 255)),     # Red
         }
         label, state_color = state_configs.get(self.state, (self.state, (200, 200, 200)))
 
@@ -365,22 +301,25 @@ class CameraCapture:
             cv2.putText(frame, pose_text, (px1 + 10, py1 + ph + 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 180), 1, cv2.LINE_AA)
 
-        # 5. Bottom Center Toast - Only for active transitions
-        bottom_msg = None
-        if self.state == "LID_OPEN" and self.lid_opened_time:
-            elapsed = time.time() - self.lid_opened_time
-            remaining = max(0, 7.0 - elapsed)
-            if remaining > 0:
-                bottom_msg = f"Lid Open - Cargo Drop: {remaining:.1f}s remaining..."
-            else:
-                bottom_msg = "Cargo Dropped. Closing Locker Lid..."
-        elif self.state == "VALIDATED":
-            mid = found_id if found_id is not None else self.last_detected_id
-            bottom_msg = f"Marker #{mid} Confirmed. Opening Locker Lid..."
-        elif self.state == "COMPLETED":
-            bottom_msg = "Delivery Completed Successfully."
-        elif self.state == "REJECTED":
-            bottom_msg = "Target Rejected. Safety Abort."
+        # 5. Bottom Center Toast — trạng thái nhiệm vụ (ASCII: font HERSHEY không có dấu tiếng Việt)
+        snap = self.tracker.snapshot() if self.tracker else {}
+        target = snap.get("targetMarkerId")
+        bottom_msg = {
+            "NO_TARGET": "No delivery mission - lid requests disabled",
+            "SCANNING": f"Searching for marker #{target}",
+            "STABILIZING": f"Marker #{target} locking {snap.get('stableFrames')}/{snap.get('requiredFrames')}",
+            "REQUEST_SENT": f"Marker #{target} confirmed - lid request sent",
+            "VALIDATED": "Server sent OPEN to locker - waiting for locker",
+            "LID_OPENING": "Locker accepted command - lid moving",
+            "COMPLETED": "Delivery completed - lid closed",
+            "FAILED": "Lid request failed - see status",
+        }.get(self.state)
+        if self.state == "LID_OPEN":
+            drop = snap.get("dropSimulationSeconds")
+            left = max(0.0, float(drop) - snap.get("secondsInState", 0)) if drop else None
+            confirmed = snap.get("lidConfirmation") != "STEP_COUNT"
+            bottom_msg = ("Lid open (limit switch)" if confirmed else "Lid moved full travel (no limit switch)") + (
+                f" - simulated drop {left:.1f}s" if left else "")
 
         if bottom_msg:
             (bw, bh), _ = cv2.getTextSize(bottom_msg, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
@@ -394,39 +333,9 @@ class CameraCapture:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     def handle_delivery_command(self, data: dict):
-        event_type = data.get("eventType")
-        with self.lock:
-            if event_type == "MARKER_VALIDATED":
-                self.state = "VALIDATED"
-                self.validated_at = time.time()
-                box_id = data.get("compartmentId")
-                marker_id = data.get("arucoMarkerId", self.last_detected_id)
-                self.status_message = f"Marker #{marker_id} Validated! Box #{box_id}. Opening lid..."
-            elif event_type in ("WRONG_MARKER", "SAFETY_ABORT", "MARKER_REJECTED", "LID_OPEN_FAILED"):
-                err_msg = data.get("errorMessage", "Sai mã ArUco hoặc không khớp đơn")
-                self.state = "REJECTED"
-                self.detected_id_count = 0
-                self.rejected_until = time.time() + 3.0
-                self.status_message = f"REJECTED: {err_msg}"
-                threading.Timer(4.0, self._reset_scanning).start()
-            elif event_type == "LID_OPENED":
-                self.state = "LID_OPEN"
-                self.lid_opened_time = time.time()
-                self.status_message = "Locker lid is OPEN! Cargo drop in progress (7s)..."
-            elif event_type == "DELIVERY_READY":
-                self.state = "COMPLETED"
-                self.status_message = "DELIVERY COMPLETED! Locker lid closed. Ready for pickup."
-                threading.Timer(15.0, self._reset_scanning).start()
-
-    def _reset_scanning(self):
-        with self.lock:
-            if self.state in ("REJECTED", "COMPLETED"):
-                self.state = "SCANNING"
-                self.status_message = "Ready to scan ArUco marker (DICT_4X4_50)..."
-                self.last_detected_id = None
-                self.detected_id_count = 0
-                self.detected_at = None
-                self.cur_x, self.cur_y, self.cur_z = None, None, None
+        """Lệnh backend gửi drone — trạng thái nằm ở tracker, camera chỉ hiển thị."""
+        if self.tracker:
+            self.tracker.handle_command(data)
 
     def _generate_fallback_jpeg(self):
         if OPENCV_AVAILABLE:
@@ -537,6 +446,8 @@ class StreamHandler(BaseHTTPRequestHandler):
                     "lastMarkerId": cls.camera_capture.last_detected_id,
                     "distanceM": cls.camera_capture.cur_z,
                 }
+            if cls.camera_capture.tracker:
+                vision_data["delivery"] = cls.camera_capture.tracker.snapshot()
 
         return {
             "id": 1,
@@ -606,11 +517,16 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 class CameraStreamerServer:
-    def __init__(self, port=8080, state=None, settings=None, on_marker_detected=None):
+    def __init__(self, port=8080, state=None, settings=None, on_marker_detected=None, tracker=None):
         self.port = port
         self.state = state
         self.settings = settings
-        self.capture = CameraCapture(on_marker_detected=on_marker_detected)
+        self.capture = CameraCapture(
+            on_marker_detected=on_marker_detected,
+            tracker=tracker,
+            dictionary=getattr(settings, "aruco_dictionary", "DICT_4X4_50"),
+            marker_size_m=getattr(settings, "aruco_marker_size_m", 0.08),
+        )
         self.httpd = None
         self.thread = None
 
