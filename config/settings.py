@@ -118,6 +118,11 @@ class Settings:
     CONTROL_LOG_FILE = os.getenv("CONTROL_LOG_FILE", str(Path(__file__).parent / "control_log_outbox.jsonl"))
     # Bỏ qua phát xung vật lý cho nắp trượt khi nhận lệnh MQTT (chỉ gửi log & bản tin kết quả MQTT)
     LID_BYPASS_PHYSICAL_MOTION = _env_bool("LID_BYPASS_PHYSICAL_MOTION", False)
+    # Lệnh nắp drone: bật khi đã lắp công tắc hành trình — chạy hết số bước mà không chạm công tắc thì báo
+    # FAILED thay vì "đã mở theo số bước, chưa xác nhận".
+    LID_REQUIRE_LIMIT_SWITCH = _env_bool("LID_REQUIRE_LIMIT_SWITCH", False)
+    # Nhớ commandId lệnh nắp drone đã chạy chừng này giây để lệnh gửi lại không chạy motor lần hai.
+    DRONE_LID_COMMAND_MEMORY_S = int(os.getenv("DRONE_LID_COMMAND_MEMORY_S", 3600))
 
     # ─── Hardware ───
     TOTAL_SLOTS = int(os.getenv("TOTAL_SLOTS", 24))

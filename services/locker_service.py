@@ -62,6 +62,10 @@ class LockerService:
         # chạy thẳng trong callback MQTT sẽ chặn cả vòng lặp mạng của paho.
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="LockerCmd")
 
+        # Lệnh nắp drone đã nhận: (lockerId, action, commandId) → {"at", "payload"}; payload None = đang chạy.
+        self._drone_lid_commands: dict = {}
+        self._drone_lid_lock = threading.Lock()
+
         # Setup handler (nếu có serial manager)
         self.setup_handler = None
         if self.serial:
@@ -369,13 +373,31 @@ class LockerService:
         ghi rõ, không thì theo ô qua `LIDn_BOXES`; ô không thuộc trục nào ⇒ None (lệnh báo NO_LID)."""
         if not self.lids or data.get("lid") is not True:
             return None
-        if slot_index in self.lids:
-            return self.lids[slot_index]
-        if str(slot_index) in self.lids:
-            return self.lids[str(slot_index)]
-        if len(self.lids) == 1:
-            return list(self.lids.values())[0]
-        return None
+        axis = data.get("lidAxis")
+        if axis is None:
+            boxes = self._lid_boxes()
+            if not any(boxes.values()):
+                return self.lids.get(1) or self.lids.get("1") or next(iter(self.lids.values()))
+            box_number = None if slot_index is None else slot_index + 1
+            axis = next((a for a, numbers in boxes.items() if box_number in numbers), None)
+            if axis is None:
+                return None
+        return self.lids.get(axis) or self.lids.get(str(axis))
+
+
+    @staticmethod
+    def _lid_boxes() -> dict:
+        """{trục: [số ô]} mà nắp của trục nằm trên — `LID1_BOXES`, `LID2_BOXES` trong .env của Pi."""
+        return {1: list(getattr(settings, "LID1_BOXES", None) or []),
+                2: list(getattr(settings, "LID2_BOXES", None) or [])}
+
+
+    def _no_lid(self, cab: dict, action: str, command_id, slot_index: int, box_id):
+        """Lệnh drone cần nắp mà ô không có nắp: báo lỗi, không kích relay cửa trước thay vào."""
+        logger.error(f"{action.upper()} {command_id}: ô {slot_index + 1} không có nắp trượt")
+        self._publish_result(cab, action, command_id, slot_index, box_id, "FAILED",
+                             LockerHwState.UNKNOWN.value, "NO_LID",
+                             f"Ô {slot_index + 1} không có nắp trượt (LID1_BOXES/LID2_BOXES trên Pi)")
 
     def _resolve_slot(self, cab: dict, data: dict):
         """(slotIndex, boxId) của lệnh: slotIndex nếu backend gửi, không thì tra boxId trong sơ đồ."""
@@ -395,7 +417,8 @@ class LockerService:
         return slot_index, box_id
 
     def _publish_result(self, cab: dict, action: str, command_id, slot_index, box_id,
-                        status: str, hw_state: str, error_code: Optional[str], message: str):
+                        status: str, hw_state: str, error_code: Optional[str], message: str,
+                        extra: Optional[dict] = None):
         payload = {
             "commandId": command_id,
             "boxId": box_id,
@@ -406,7 +429,121 @@ class LockerService:
             "errorMessage": message,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        if extra:
+            payload.update(extra)
         self.mqtt.publish(f"cabinet/{cab['id']}/command/{action}/result", json.dumps(payload), qos=1)
+        return payload
+
+    # ═══════════════════════════════════════════════════════════
+    #  NẮP TRƯỢT CỦA LUỒNG DRONE (lệnh open/close có `lid: true`)
+    #  Không đổi cơ cấu motor (LidController) — chỉ thêm các chốt chặn quanh lời gọi:
+    #   • commandId đã chạy ⇒ không chạy motor lần hai, gửi lại đúng kết quả cũ (backend gửi lại khi mất ACK)
+    #   • lệnh mở quá `expiresAt` ⇒ bỏ (tủ kết nối lại không mở do lệnh cũ)
+    #   • nắp đã ở đúng vị trí ⇒ không kích motor
+    #   • báo ACCEPTED ngay khi nhận, rồi kết quả cuối; ghi rõ có/không có công tắc hành trình xác nhận
+    # ═══════════════════════════════════════════════════════════
+
+    def _drone_lid_cached(self, key):
+        """Kết quả đã lưu của lệnh nắp drone (None nếu lệnh mới). Dọn bản ghi quá hạn nhớ."""
+        now = time.monotonic()
+        with self._drone_lid_lock:
+            for old in [k for k, v in self._drone_lid_commands.items()
+                        if now - v["at"] > settings.DRONE_LID_COMMAND_MEMORY_S]:
+                del self._drone_lid_commands[old]
+            entry = self._drone_lid_commands.get(key)
+            if entry is None:
+                self._drone_lid_commands[key] = {"at": now, "payload": None}
+            return entry
+
+    def _drone_lid_done(self, key, payload):
+        with self._drone_lid_lock:
+            self._drone_lid_commands[key] = {"at": time.monotonic(), "payload": payload}
+
+    @staticmethod
+    def _expired(expires_at) -> bool:
+        if not expires_at:
+            return False
+        try:
+            deadline = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+        except ValueError:
+            return True   # hạn không đọc được ⇒ không liều mở
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) > deadline
+
+    def _run_drone_lid(self, cab: dict, action: str, data: dict, slot_index, box_id, lid):
+        """Chạy lệnh nắp drone (action = "open" | "close") với các chốt chặn ở trên."""
+        cabinet_id = cab["id"]
+        command_id = data.get("commandId")
+        key = (str(cabinet_id), action, command_id)
+        target = LockerHwState.OPEN.value if action == "open" else LockerHwState.CLOSED.value
+        verb = "mở" if action == "open" else "đóng"
+
+        seen = self._drone_lid_cached(key) if command_id else None
+        if seen is not None:
+            logger.warning(f"DRONE LID {action.upper()} duplicate: locker={cabinet_id}, slot={slot_index}, "
+                           f"cmdId={command_id} — không chạy motor lần hai")
+            if seen["payload"] is None:
+                self._publish_result(cab, action, command_id, slot_index, box_id, "ACCEPTED", "MOVING", None,
+                                     f"Tủ đã nhận lệnh {verb} này, nắp đang chạy", {"duplicate": True})
+            else:
+                cached = dict(seen["payload"], duplicate=True,
+                              timestamp=datetime.now(timezone.utc).isoformat())
+                self.mqtt.publish(f"cabinet/{cabinet_id}/command/{action}/result", json.dumps(cached), qos=1)
+            return
+
+        def finish(status, hw_state, error_code, message, extra=None):
+            payload = self._publish_result(cab, action, command_id, slot_index, box_id, status, hw_state,
+                                           error_code, message, extra)
+            if command_id:
+                self._drone_lid_done(key, payload)
+            if self.heartbeat and status == "SUCCESS":
+                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
+            logger.warning(f"DRONE LID {action.upper()} {status}: locker={cabinet_id}, slot={slot_index}, "
+                           f"box={box_id}, cmdId={command_id}, hwState={hw_state}, error={error_code}")
+
+        status_now = lid.status() if hasattr(lid, "status") else {}
+        current = status_now.get("state")
+        if action == "open" and self._expired(data.get("expiresAt")):
+            return finish("FAILED", current or LockerHwState.UNKNOWN.value, "COMMAND_EXPIRED",
+                          f"Lệnh mở nắp đã quá hạn ({data.get('expiresAt')}) — không mở")
+
+        def confirmation(at_limit: bool):
+            return "LIMIT_SWITCH" if at_limit else "STEP_COUNT"
+
+        limit_check = getattr(lid, "at_end" if action == "open" else "at_home", None)
+        at_limit = bool(limit_check()) if callable(limit_check) else bool(limit_check)
+        if not getattr(lid, "busy", False) and current == target:
+            if settings.LID_REQUIRE_LIMIT_SWITCH and not at_limit:
+                return finish("FAILED", LockerHwState.UNKNOWN.value, "LIMIT_NOT_REACHED",
+                              f"Trạng thái lưu của nắp là {verb} nhưng công tắc hành trình chưa xác nhận")
+            return finish("SUCCESS", target, None, f"Nắp trượt đã ở vị trí {verb} — không chạy motor lại",
+                          {"alreadyInPosition": True, "lidConfirmation": confirmation(bool(at_limit))})
+
+        self._publish_result(cab, action, command_id, slot_index, box_id, "ACCEPTED", "MOVING", None,
+                             f"Tủ đã nhận lệnh {verb} nắp trượt, nắp đang chạy")
+        logger.warning(f"🚀 SLIDING LID {action.upper()} REQUEST: locker={cabinet_id}, slot={slot_index}, "
+                       f"box={box_id}, cmdId={command_id}")
+        if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", False):
+            logger.info("⚡ LID_BYPASS_PHYSICAL_MOTION: chỉ báo kết quả, không trượt nắp cơ học.")
+            return finish("SUCCESS", target, None, f"(Giả lập — hardware bypass) báo nắp đã {verb}, nắp KHÔNG trượt",
+                          {"lidConfirmation": "BYPASS"})
+
+        result = lid.open() if action == "open" else lid.close()
+        step_count_only = (result.get("error") == "LIMIT_NOT_REACHED"
+                           and not settings.LID_REQUIRE_LIMIT_SWITCH)
+        ok = result.get("result") == "OK" or step_count_only
+        if not ok:
+            error_code = result.get("error") or "LID_JAMMED"
+            return finish("FAILED", (lid.status() or {}).get("state", LockerHwState.UNKNOWN.value), error_code,
+                          f"{verb.capitalize()} nắp trượt ô tủ thất bại: {error_code}")
+        reached_limit = bool(limit_check()) if callable(limit_check) else bool(limit_check)
+        if not reached_limit and settings.LID_REQUIRE_LIMIT_SWITCH:
+            return finish("FAILED", LockerHwState.UNKNOWN.value, "LIMIT_NOT_REACHED",
+                          f"Nắp chạy hết số bước nhưng không chạm công tắc hành trình — chưa xác nhận đã {verb}")
+        message = (f"Nắp trượt ô tủ đã {verb} hoàn toàn (công tắc hành trình)" if reached_limit else
+                   f"Nắp đã chạy hết hành trình theo số bước — chưa có công tắc hành trình xác nhận đã {verb}")
+        return finish("SUCCESS", target, None, message, {"lidConfirmation": confirmation(reached_limit)})
 
     def _handle_open_command(self, cab: dict, data: dict):
         """Topic: cabinet/{lockerId}/command/open"""
@@ -431,21 +568,7 @@ class LockerService:
             self._no_lid(cab, "open", command_id, slot_index, box_id)
             return
         if lid:
-            logger.warning(f"🚀 SLIDING LID OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
-            if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", False):
-                logger.info("⚡ LID_BYPASS_PHYSICAL_MOTION: Chi gui message va log ket qua mo, khong truot nap co hoc.")
-                ok = True
-                result = {"result": "OK", "state": "OPEN"}
-            else:
-                result = lid.open()
-                ok = result.get("result") == "OK" or result.get("error") == "LIMIT_NOT_REACHED"
-            hw_state = LockerHwState.OPEN.value if ok else LockerHwState.CLOSED.value
-            status = "SUCCESS" if ok else "FAILED"
-            error_code = None if ok else result.get("error", "LID_JAMMED")
-            message = "Nắp trượt ô tủ đã mở hoàn toàn" if ok else f"Mở nắp trượt ô tủ thất bại: {error_code}"
-            self._publish_result(cab, "open", command_id, slot_index, box_id, status, hw_state, error_code, message)
-            if self.heartbeat:
-                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
+            self._run_drone_lid(cab, "open", data, slot_index, box_id, lid)
             return
 
         logger.warning(f"🔓 OPEN REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
@@ -489,21 +612,7 @@ class LockerService:
             self._no_lid(cab, "close", command_id, slot_index, box_id)
             return
         if lid:
-            logger.warning(f"🔒 SLIDING LID CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, box={box_id}, cmdId={command_id}")
-            if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", False):
-                logger.info("⚡ LID_BYPASS_PHYSICAL_MOTION: Chi gui message va log ket qua dong, khong truot nap co hoc.")
-                ok = True
-                result = {"result": "OK", "state": "CLOSED"}
-            else:
-                result = lid.close()
-                ok = result.get("result") == "OK" or result.get("error") == "LIMIT_NOT_REACHED"
-            hw_state = LockerHwState.CLOSED.value if ok else LockerHwState.OPEN.value
-            status = "SUCCESS" if ok else "FAILED"
-            error_code = None if ok else result.get("error", "LID_JAMMED")
-            message = "Nắp trượt ô tủ đã đóng hoàn toàn và khóa an toàn" if ok else f"Đóng nắp trượt ô tủ thất bại: {error_code}"
-            self._publish_result(cab, "close", command_id, slot_index, box_id, status, hw_state, error_code, message)
-            if self.heartbeat:
-                self.heartbeat.update_locker_state(cabinet_id, slot_index, hw_state)
+            self._run_drone_lid(cab, "close", data, slot_index, box_id, lid)
             return
 
         logger.warning(f"🔒 CLOSE REQUEST: locker={cabinet_id}, slot={slot_index}, cmdId={command_id}")
