@@ -292,10 +292,10 @@ class LidController:
             if step_budget is not None:
                 self.state = LidState.STOPPED
                 return self._finish({"result": "OK", "state": self.state.value, "steps": steps}, steps)
-            self._reached(target)
+            self.state = LidState.FAULT
             self.last_error = "LIMIT_NOT_REACHED"
             logger.error(f"Lid {self.axis} FAULT: {steps} steps toward {target.value} without hitting the limit switch")
-            return self._finish({"result": "OK", "state": self.state.value,
+            return self._finish({"result": "FAIL", "state": self.state.value, "error": "LIMIT_NOT_REACHED",
                                  "steps": steps}, steps)
         finally:
             self._group.write(self.pul_pin, self.step_active_low)
