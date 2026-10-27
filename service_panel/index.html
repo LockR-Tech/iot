@@ -782,7 +782,8 @@ function renderConfigStatus() {
   $('#cfgWarnings').innerHTML = hwWarnings().map(x => `<li>${esc(x)}</li>`).join('');
   $('#cfgStatus').innerHTML = (hw.saved ? '<span class="badge ok">Đang chạy theo cấu hình đã lưu trên Pi</span>' : '<span class="badge">Đang chạy theo .env</span>') +
     (hw.dirty ? ' <span class="badge warn">Có thay đổi chưa lưu</span>' : '');
-  $('#cfgSave').disabled = !hw.dirty || issues.length > 0 || !!hw.busy;
+  // Chưa lưu lần nào (đang hiện bảng mẫu) thì cho lưu luôn để bảng mẫu thành cấu hình của tủ.
+  $('#cfgSave').disabled = !(hw.dirty || hw.defaultWiring) || issues.length > 0 || !!hw.busy;
 }
 function renumberBoxes(fn) {   // ô dưới nắp và vai trò dòng đấu nối đổi số theo khi xoá/đổi chỗ ô
   hw.cfg.lids.forEach(l => { l.boxes = l.boxes.map(fn).filter(b => b !== null).sort((a, b) => a - b); });
