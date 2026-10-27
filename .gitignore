@@ -14,6 +14,8 @@ wheels/
 config/cabinet_state.json
 # Tốc độ/xung nắp trượt chỉnh trên bảng điều khiển kỹ thuật (/service)
 config/lid_tuning.json
+# Bản đồ chân admin đẩy xuống từ web (lệnh hw-config), riêng từng Pi
+config/hardware_config.json*
 # Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend
 config/control_log_outbox.jsonl*
 # Khoá công khai kiểm mã mở ô qua Bluetooth, tải từ backend

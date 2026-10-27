@@ -7,6 +7,13 @@ from utils.logger import get_logger
 load_dotenv()
 logger = get_logger("Settings")
 
+# Cấu hình phần cứng admin đẩy xuống từ web (config/hardware_config.json) ghi đè `.env` — phải chạy
+# trước class Settings bên dưới vì các thuộc tính đọc os.environ lúc import.
+from config.hardware_config import apply_overlay  # noqa: E402
+HARDWARE_OVERLAY = apply_overlay()
+if HARDWARE_OVERLAY:
+    logger.info("Hardware config from admin web applied (config/hardware_config.json overrides .env)")
+
 
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -114,6 +121,10 @@ class Settings:
 
     # Tốc độ/xung chỉnh trên bảng điều khiển kỹ thuật, ghi đè LID_* (riêng từng Pi, không commit).
     LID_TUNING_FILE = os.getenv("LID_TUNING_FILE", str(Path(__file__).parent / "lid_tuning.json"))
+    # Bản đồ chân admin sửa trên web (lệnh hw-config) — ghi đè `.env`, xem config/hardware_config.py.
+    HARDWARE_CONFIG_FILE = os.getenv("HARDWARE_CONFIG_FILE", str(Path(__file__).parent / "hardware_config.json"))
+    # Script root cập nhật dòng `gpio=…=op,dl` (relay về mức thấp lúc khởi động) và ExecStopPost khi đổi chân relay.
+    BOOT_RELAY_SCRIPT = os.getenv("BOOT_RELAY_SCRIPT", str(Path(__file__).parent.parent / "scripts" / "boot_relay_pins.py"))
     # Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend — giữ qua mất mạng và khởi động lại.
     CONTROL_LOG_FILE = os.getenv("CONTROL_LOG_FILE", str(Path(__file__).parent / "control_log_outbox.jsonl"))
     # Bỏ qua phát xung vật lý cho nắp trượt khi nhận lệnh MQTT (chỉ gửi log & bản tin kết quả MQTT)
