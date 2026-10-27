@@ -12,6 +12,7 @@ Kiosk không có đường dẫn tới trang này. Lệnh gửi từ trang khác
 kiosk ở cổng 3002) bị chặn bằng kiểm tra `Origin`.
 """
 import json
+import os
 import socket
 import threading
 import time
@@ -26,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from config import hardware_config
 from hardware.gpio_pins import HEADER_PIN, POWER_PINS
 from utils.logger import get_logger
 
@@ -66,13 +68,16 @@ def local_ip() -> str:
 class ServicePanel:
     def __init__(self, hardware, lids: Dict[int, object], cabinet_state, settings,
                  save_tuning: Optional[Callable[[], None]] = None,
-                 fetch_json: Optional[Callable[[str], dict]] = None):
+                 fetch_json: Optional[Callable[[str], dict]] = None,
+                 restart: Optional[Callable[[], None]] = None):
         self.hardware = hardware
         self.lids = lids or {}
         self.cabinet_state = cabinet_state
         self.settings = settings
         self._save_tuning = save_tuning
         self._fetch_json = fetch_json or _http_get_json
+        # Lưu bản đồ chân mới ⇒ khởi động lại tiến trình (systemd chạy lại) để GPIO dựng theo bản mới.
+        self._restart = restart or _restart_soon
         self._layout_cache = (0.0, None)
         self._layout_lock = threading.Lock()
         self.actions = deque(maxlen=60)
@@ -258,6 +263,41 @@ class ServicePanel:
             lid.stop()
         return self._log("Dừng tất cả trục", {"result": "OK"})
 
+    # ─── cấu hình phần cứng (tab Cấu hình) ───
+
+    def hw_config(self) -> dict:
+        """Cấu hình đang chạy + sơ đồ đấu dây đã lưu (chưa lưu thì bảng mẫu TU01)."""
+        saved = hardware_config.load(self.settings.HARDWARE_CONFIG_FILE)
+        wiring = (saved or {}).get("wiring")
+        default_rows = hardware_config.load_default_wiring()
+        return {
+            "running": hardware_config.effective(self.settings, self.lids),
+            "saved": saved is not None,
+            "wiring": wiring if wiring is not None else default_rows,
+            "defaultWiring": wiring is None,
+            "defaultWiringRows": default_rows,
+        }
+
+    def save_hw_config(self, config: dict, wiring: list) -> dict:
+        """Lưu bản đồ chân + sơ đồ đấu dây. Bản đồ chân khác cái đang chạy ⇒ khởi động lại bộ điều khiển."""
+        running = hardware_config.effective(self.settings, self.lids)
+        outcome = hardware_config.store(config, self.settings, wiring)
+        if outcome["errors"]:
+            raise ValueError("; ".join(outcome["errors"]))
+        restarting = hardware_config.functional(outcome["config"]) != hardware_config.functional(running)
+        self._log("Lưu cấu hình phần cứng" + (" (khởi động lại)" if restarting else " (sơ đồ đấu dây)"), {"result": "OK"})
+        if restarting:
+            self._restart()
+        return {"saved": True, "restarting": restarting, "warnings": outcome["warnings"]}
+
+
+def _restart_soon(delay: float = 1.5):
+    """Thoát với mã 75 sau khi kịp trả lời HTTP — systemd chạy lại lockr-controller (như lệnh restart)."""
+    logger.warning("Hardware config saved from /service — restarting lockr-controller")
+    timer = threading.Timer(delay, os._exit, args=(75,))
+    timer.daemon = True
+    timer.start()
+
 
 def _http_get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -269,6 +309,11 @@ def _http_get_json(url: str) -> dict:
 
 class OpenBoxRequest(BaseModel):
     ms: Optional[int] = None
+
+
+class HardwareSaveRequest(BaseModel):
+    config: dict
+    wiring: list = []
 
 
 class JogRequest(BaseModel):
@@ -345,5 +390,13 @@ def create_service_router(panel: ServicePanel) -> APIRouter:
     @router.post("/api/stop-all")
     def stop_all():
         return panel.stop_all()
+
+    @router.get("/api/hardware")
+    def hardware():
+        return panel.hw_config()
+
+    @router.put("/api/hardware")
+    def save_hardware(req: HardwareSaveRequest):
+        return _call(panel.save_hw_config, req.config, req.wiring)
 
     return router

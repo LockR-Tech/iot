@@ -19,6 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config import hardware_config
 from config.settings import settings
 from infracstructure.cabinet_state import CabinetState
+from infracstructure.service_panel import ServicePanel
 from services.locker_service import RESTART_EXIT_CODE, LockerService
 from tests.test_mqtt_contract import FakeMqtt
 
@@ -154,7 +155,7 @@ class HwConfigCommandTest(unittest.TestCase):
     def result(self, action="hw-config"):
         return self.mqtt.on(f"cabinet/7/command/{action}/result")[-1]
 
-    @mock.patch("services.locker_service.subprocess.run")
+    @mock.patch("config.hardware_config.subprocess.run")
     def test_valid_config_is_saved_then_controller_restarts(self, run):
         self.send({"commandId": "h-1", "config": TU01})
         r = self.result()
@@ -167,7 +168,7 @@ class HwConfigCommandTest(unittest.TestCase):
         run.assert_not_called()                                         # chân relay không đổi
         self.assertIn("cabinet/7/command/hw-config/result", [t for t, *_ in self.mqtt.waited])
 
-    @mock.patch("services.locker_service.subprocess.run")
+    @mock.patch("config.hardware_config.subprocess.run")
     def test_changed_relay_pins_update_boot_line(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, stdout='{"ok": true}\n', stderr="")
         self.send({"commandId": "h-2", "config": rewired()})
@@ -176,7 +177,7 @@ class HwConfigCommandTest(unittest.TestCase):
         self.assertEqual(args[:3], ["sudo", "-n", "python3"])
         self.assertEqual(args[-1], "17,27,22,23,6,5,16")
 
-    @mock.patch("services.locker_service.subprocess.run")
+    @mock.patch("config.hardware_config.subprocess.run")
     def test_boot_line_failure_is_reported_as_warning(self, run):
         run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="sudo: a password is required")
         self.send({"commandId": "h-3", "config": cfg(relayPins=[5, 6, 13, 19, 26, 22, 9])})
@@ -238,6 +239,74 @@ class BootRelayScriptTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(report["ok"])
         self.assertIn("gpio=5,6,13", self.config_txt.read_text(encoding="utf-8"))
+
+
+class ServicePanelConfigTest(unittest.TestCase):
+    """Tab Cấu hình trên bảng /service: sửa bản đồ chân và sơ đồ đấu dây ngay trên Pi."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg_path = os.path.join(self.tmp.name, "hardware_config.json")
+        self.patches = [
+            mock.patch.object(settings, "HARDWARE_CONFIG_FILE", self.cfg_path),
+            mock.patch.object(settings, "LID_TUNING_FILE", os.path.join(self.tmp.name, "lid_tuning.json")),
+            mock.patch.object(settings, "HARDWARE_BACKEND", "rs485"),     # không gọi sudo trong test
+        ]
+        for p in self.patches:
+            p.start()
+        self.restarts = []
+        self.panel = ServicePanel(None, {}, None, settings, restart=lambda: self.restarts.append(1))
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_first_load_shows_running_config_and_tu01_wiring(self):
+        hw = self.panel.hw_config()
+        self.assertFalse(hw["saved"])
+        self.assertTrue(hw["defaultWiring"])
+        self.assertGreater(len(hw["wiring"]), 20)
+        self.assertIn("XD1N3", [r["wire"] for r in hw["wiring"]])
+        self.assertEqual(hw["running"]["relayPins"], list(settings.GPIO_RELAY_PINS))
+
+    def test_wiring_only_change_saves_without_restart(self):
+        running = self.panel.hw_config()["running"]
+        wiring = [{"group": "Relay", "from": "Pi chân 6", "wire": "XD1N3", "to": "Relay DC−", "hack": "x"}, {"from": ""}]
+        r = self.panel.save_hw_config(running, wiring)
+        self.assertFalse(r["restarting"])
+        self.assertEqual(self.restarts, [])
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["wiring"], [{"group": "Relay", "from": "Pi chân 6", "wire": "XD1N3",
+                                             "to": "Relay DC−", "via": "", "note": ""}])
+        self.assertFalse(self.panel.hw_config()["defaultWiring"])
+
+    def test_pin_change_saves_and_restarts(self):
+        changed = copy.deepcopy(self.panel.hw_config()["running"])
+        changed["unlockMs"] = changed["unlockMs"] + 500
+        r = self.panel.save_hw_config(changed, [])
+        self.assertTrue(r["restarting"])
+        self.assertEqual(self.restarts, [1])
+
+    def test_invalid_config_is_rejected(self):
+        bad = copy.deepcopy(self.panel.hw_config()["running"])
+        bad["doorPins"][0] = bad["relayPins"][0]
+        with self.assertRaises(ValueError):
+            self.panel.save_hw_config(bad, [])
+        self.assertFalse(os.path.exists(self.cfg_path))
+
+    def test_admin_apply_keeps_wiring_written_on_pi(self):
+        running = self.panel.hw_config()["running"]
+        self.panel.save_hw_config(running, [{"from": "Pi chân 1", "wire": "XL6", "to": "Domino 2 cọc 4"}])
+        outcome = hardware_config.store(running, settings)                  # như lệnh hw-config (không có wiring)
+        self.assertEqual(outcome["errors"], [])
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["wiring"][0]["wire"], "XL6")
+        self.assertNotIn("wiring", hardware_config.functional(stored))
+
+    def test_wiring_is_capped(self):
+        with self.assertRaises(ValueError):
+            hardware_config.sanitize_wiring([{"from": "x"}] * (hardware_config.MAX_WIRING_ROWS + 1))
 
 
 if __name__ == "__main__":

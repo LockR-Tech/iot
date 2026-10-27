@@ -10,16 +10,24 @@ Không import `config.settings` ở đây: settings.py gọi `apply_overlay` lú
 """
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
 DEFAULT_FILE = str(Path(__file__).parent / "hardware_config.json")
+# Sơ đồ đấu dây mẫu của tủ TU01 (bảng tay của chủ tủ 2026-10-27) — hiện khi Pi chưa lưu sơ đồ nào.
+DEFAULT_WIRING_FILE = str(Path(__file__).parent / "wiring_default.json")
+# Một dòng đấu dây: nhóm, chân Pi (từ), tên dây, tới (relay/domino/driver), qua, ghi chú. Pi không dùng để chạy.
+WIRING_FIELDS = ("group", "from", "wire", "to", "via", "note")
+MAX_WIRING_ROWS = 300
+MAX_WIRING_TEXT = 300
 
 # Chân BCM có trên header 40 chân (0, 1 là EEPROM của HAT — không dùng).
 VALID_GPIO = range(2, 28)
 UNLOCK_MS_RANGE = (100, 10000)
 MAX_BOXES = 16
 LID_PIN_KEYS = ("pulPin", "dirPin", "homePin", "endPin")
+LID_PIN_NAMES = {"pulPin": "PUL−", "dirPin": "DIR−", "homePin": "công tắc gốc", "endPin": "công tắc cuối"}
 
 # Trục ⇒ tiền tố biến môi trường (trục 1 dùng LID_*, trục 2 dùng LID2_*).
 _LID_PREFIX = {1: "LID", 2: "LID2"}
@@ -103,9 +111,9 @@ def validate(cfg) -> list:
         for key in LID_PIN_KEYS:
             pin = lid.get(key)
             if not isinstance(pin, int) or isinstance(pin, bool):
-                errors.append(f"Trục {axis}: thiếu chân {key}")
+                errors.append(f"Trục {axis}: thiếu chân {LID_PIN_NAMES[key]}")
             elif lid.get("enabled") is True:
-                used.append((pin, f"trục {axis} {key}"))
+                used.append((pin, f"{LID_PIN_NAMES[key]} trục {axis}"))
         boxes = lid.get("boxes")
         if not isinstance(boxes, list) or not all(isinstance(b, int) and not isinstance(b, bool) for b in boxes):
             errors.append(f"Trục {axis}: boxes phải là danh sách số ô")
@@ -175,6 +183,102 @@ def apply_overlay(path: Optional[str] = None) -> Optional[dict]:
         return None
     os.environ.update(to_env(cfg))
     return cfg
+
+
+def sanitize_wiring(rows) -> list:
+    """Chỉ giữ các cột đã biết (chuỗi, cắt độ dài), bỏ dòng trống. Quá MAX_WIRING_ROWS ⇒ ValueError."""
+    if not isinstance(rows, list):
+        return []
+    if len(rows) > MAX_WIRING_ROWS:
+        raise ValueError(f"Sơ đồ đấu dây tối đa {MAX_WIRING_ROWS} dòng")
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        clean = {f: str(row.get(f) or "").strip()[:MAX_WIRING_TEXT] for f in WIRING_FIELDS}
+        if any(clean.values()):
+            out.append(clean)
+    return out
+
+
+def load_default_wiring(path: str = DEFAULT_WIRING_FILE) -> list:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return sanitize_wiring(json.load(f))
+    except (OSError, ValueError):
+        return []
+
+
+def functional(cfg: dict) -> dict:
+    """Phần Pi dùng để chạy (bỏ sơ đồ đấu dây), ô dưới nắp xếp tăng dần — để so hai cấu hình."""
+    out = {k: v for k, v in cfg.items() if k != "wiring"}
+    out["lids"] = [{**lid, "boxes": sorted(lid.get("boxes", []))}
+                   for lid in sorted(cfg.get("lids", []), key=lambda l: l.get("axis", 0))]
+    return out
+
+
+def sync_lid_tuning(cfg: dict, path: str):
+    """Chiều mở và mức công tắc trong lid_tuning.json ghi đè `.env` ⇒ đổi theo cấu hình mới."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            tuning = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return
+    changed = False
+    for lid in cfg["lids"]:
+        saved = tuning.get(str(lid["axis"]))
+        if isinstance(saved, dict):
+            saved["open_dir_high"] = lid["openDirHigh"]
+            saved["limit_active_low"] = lid["limitActiveLow"]
+            changed = True
+    if changed:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(tuning, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+
+def update_boot_relay_pins(pins: list, script: str, backend: str) -> Optional[str]:
+    """Chạy scripts/boot_relay_pins.py bằng sudo (dòng `gpio=` + ExecStopPost). Trả cảnh báo nếu không làm được."""
+    if backend != "gpio":
+        return None
+    csv = ",".join(str(int(p)) for p in pins)
+    try:
+        done = subprocess.run(["sudo", "-n", "python3", script, csv], capture_output=True, text=True, timeout=20)
+        report = json.loads(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else {}
+        if done.returncode == 0 and report.get("ok"):
+            return None
+        reason = report.get("error") or done.stderr.strip() or f"mã {done.returncode}"
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        reason = str(e)
+    return (f"Chưa cập nhật được dòng giữ relay ở mức thấp lúc khởi động ({reason}). "
+            f"Chạy tay trên Pi: sudo python3 scripts/boot_relay_pins.py {csv}")
+
+
+def store(cfg, settings, wiring: Optional[list] = None) -> dict:
+    """Đường lưu chung của lệnh hw-config (admin web) và nút Lưu trên bảng /service.
+
+    Kiểm tra ⇒ ghi file (giữ sơ đồ đấu dây cũ nếu `wiring` là None) ⇒ đồng bộ lid_tuning.json ⇒ đổi
+    chân relay thì cập nhật dòng an toàn lúc khởi động. Trả {"errors", "warnings", "config"}; có lỗi
+    thì không ghi gì. Việc khởi động lại để Pi chạy theo bản mới là của nơi gọi.
+    """
+    if isinstance(cfg, dict) and isinstance(cfg.get("lids"), list):
+        cfg = normalize(cfg)
+    errors = validate(cfg)
+    if errors:
+        return {"errors": errors, "warnings": [], "config": cfg}
+    path = settings.HARDWARE_CONFIG_FILE
+    if wiring is None:
+        wiring = (load(path) or {}).get("wiring")
+    cfg = {**functional(cfg), **({"wiring": sanitize_wiring(wiring)} if wiring is not None else {})}
+    save(cfg, path)
+    sync_lid_tuning(cfg, settings.LID_TUNING_FILE)
+    warnings = []
+    if list(cfg["relayPins"]) != list(settings.GPIO_RELAY_PINS):
+        warning = update_boot_relay_pins(cfg["relayPins"], settings.BOOT_RELAY_SCRIPT, settings.HARDWARE_BACKEND)
+        if warning:
+            warnings.append(warning)
+    return {"errors": [], "warnings": warnings, "config": cfg}
 
 
 def effective(settings, lids: Optional[dict] = None) -> dict:

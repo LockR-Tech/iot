@@ -1,0 +1,35 @@
+[
+  {"group": "Relay", "from": "Pi chân 6 (GND)", "wire": "XD1N3", "to": "Relay DC−", "via": "", "note": ""},
+  {"group": "Relay", "from": "Pi chân 2 (5 V)", "wire": "Đ1N3", "to": "Relay DC+", "via": "", "note": "Nuôi cuộn relay"},
+  {"group": "Relay", "from": "Pi chân 29 (GPIO5)", "wire": "C3N3", "to": "Relay IN1", "via": "", "note": "Ô 1"},
+  {"group": "Relay", "from": "Pi chân 31 (GPIO6)", "wire": "XĐ1N3", "to": "Relay IN2", "via": "", "note": "Ô 2"},
+  {"group": "Relay", "from": "Pi chân 33 (GPIO13)", "wire": "C5N3", "to": "Relay IN3", "via": "", "note": "Ô 3"},
+  {"group": "Relay", "from": "Pi chân 35 (GPIO19)", "wire": "C6N3", "to": "Relay IN4", "via": "", "note": "Ô 4"},
+  {"group": "Relay", "from": "Pi chân 37 (GPIO26)", "wire": "C1N3", "to": "Relay IN5", "via": "", "note": "Ô 5"},
+  {"group": "Relay", "from": "Pi chân 15 (GPIO22)", "wire": "C2N3", "to": "Relay IN6", "via": "", "note": "Ô 6"},
+  {"group": "Relay", "from": "Pi chân 16 (GPIO23)", "wire": "C4N3", "to": "Relay IN7", "via": "", "note": "Ô 7"},
+  {"group": "Relay", "from": "Relay K1–K7 (đầu ra)", "wire": "xanh mảnh", "to": "Dây âm khoá ô 1–7 và −V", "via": "", "note": "Nhà làm tủ nối sẵn. Jumper kênh 1–7 ở H"},
+
+  {"group": "Domino 1", "from": "Pi chân 25 (GND)", "wire": "V2", "to": "Domino 1 cọc 1", "via": "Cầu nối cọc lẻ 1-3-5-7-9-11", "note": "GND chung cảm biến cửa"},
+  {"group": "Domino 1", "from": "Pi chân 7 (GPIO4)", "wire": "V3", "to": "Domino 1 cọc 2", "via": "", "note": "Cửa ô 1"},
+  {"group": "Domino 1", "from": "Pi chân 32 (GPIO12)", "wire": "V1", "to": "Domino 1 cọc 4", "via": "", "note": "Cửa ô 2"},
+  {"group": "Domino 1", "from": "Pi chân 36 (GPIO16)", "wire": "V6", "to": "Domino 1 cọc 6", "via": "", "note": "Cửa ô 3"},
+  {"group": "Domino 1", "from": "Pi chân 38 (GPIO20)", "wire": "V5", "to": "Domino 1 cọc 8", "via": "", "note": "Cửa ô 4"},
+  {"group": "Domino 1", "from": "Pi chân 40 (GPIO21)", "wire": "V4", "to": "Domino 1 cọc 10", "via": "", "note": "Cửa ô 5"},
+  {"group": "Domino 1", "from": "Pi chân 18 (GPIO24)", "wire": "C1N1", "to": "Domino 1 cọc 12", "via": "", "note": "Cửa ô 6"},
+
+  {"group": "Domino 2", "from": "Pi chân 1 (3,3 V)", "wire": "XL6", "to": "Domino 2 cọc 4", "via": "", "note": "PUL+ driver 1 (và PUL+/DIR+ driver 2)"},
+  {"group": "Domino 2", "from": "Pi chân 17 (3,3 V)", "wire": "ĐN", "to": "Domino 2 cọc 6", "via": "", "note": "DIR+ driver 1"},
+  {"group": "Domino 2", "from": "Pi chân 12 (GPIO18)", "wire": "XL1", "to": "Domino 2 cọc 5", "via": "", "note": "PUL− driver 1 (nắp trục 1)"},
+  {"group": "Domino 2", "from": "Pi chân 13 (GPIO27)", "wire": "XL4", "to": "Domino 2 cọc 7", "via": "", "note": "DIR− driver 1 (nắp trục 1)"},
+  {"group": "Domino 2", "from": "Pi chân 22 (GPIO25)", "wire": "XL2", "to": "Domino 2 cọc 11", "via": "", "note": "Cửa ô 7"},
+  {"group": "Domino 2", "from": "Pi chân 30 (GND)", "wire": "XL3", "to": "Domino 2 cọc 12", "via": "", "note": "GND cảm biến cửa ô 7"},
+  {"group": "Domino 2", "from": "Nguồn tổ ong +V", "wire": "nâu", "to": "Domino 2 cọc 1–2 (+12 V)", "via": "", "note": "+12 V cho khoá và driver 1"},
+  {"group": "Domino 2", "from": "Nguồn tổ ong −V", "wire": "xanh", "to": "Domino 2 cọc 3 (−V)", "via": "", "note": ""},
+
+  {"group": "Driver 2 (dự kiến)", "from": "Pi chân 11 (GPIO17)", "wire": "", "to": "Driver 2 PUL−", "via": "", "note": "Nắp trục 2"},
+  {"group": "Driver 2 (dự kiến)", "from": "Pi chân 3 (GPIO2)", "wire": "", "to": "Driver 2 DIR−", "via": "", "note": "Nắp trục 2"},
+  {"group": "Driver 2 (dự kiến)", "from": "Domino 2 cọc 4 (3,3 V)", "wire": "", "to": "Driver 2 PUL+ và DIR+", "via": "", "note": "Chung 3,3 V với PUL+ driver 1"},
+  {"group": "Driver 2 (dự kiến)", "from": "Nguồn tổ ong +V / −V", "wire": "", "to": "Driver 2 VCC / GND", "via": "", "note": ""},
+  {"group": "Driver 2 (dự kiến)", "from": "Động cơ trục 2", "wire": "xanh lá / đen / xanh dương / đỏ", "to": "Driver 2 A+ / A− / B+ / B−", "via": "", "note": ""}
+]

@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -381,26 +380,20 @@ class LockerService:
         """
         command_id = data.get("commandId")
         topic = f"cabinet/{cab['id']}/command/hw-config/result"
-        cfg = data.get("config")
-        if isinstance(cfg, dict) and isinstance(cfg.get("lids"), list):
-            cfg = hardware_config.normalize(cfg)
-        errors = hardware_config.validate(cfg)
-        if errors:
-            logger.error(f"HW-CONFIG {command_id} rejected: {errors}")
-            return self._publish_cmd_result(cab, "hw-config", command_id, "FAILED", {
-                "errorCode": "INVALID_CONFIG", "errorMessage": "; ".join(errors), "errors": errors})
         try:
-            hardware_config.save(cfg, settings.HARDWARE_CONFIG_FILE)
-            self._sync_lid_tuning(cfg)
+            # wiring=None: giữ sơ đồ đấu dây đã ghi trên bảng /service của Pi.
+            outcome = hardware_config.store(data.get("config"), settings)
         except OSError as e:
             return self._publish_cmd_result(cab, "hw-config", command_id, "FAILED", {
                 "errorCode": "SAVE_FAILED", "errorMessage": f"Không lưu được cấu hình trên Pi: {e}"})
-
-        warnings = []
-        if list(cfg["relayPins"]) != list(settings.GPIO_RELAY_PINS):
-            warning = self._update_boot_relay_pins(cfg["relayPins"])
-            if warning:
-                warnings.append(warning)
+        if outcome["errors"]:
+            logger.error(f"HW-CONFIG {command_id} rejected: {outcome['errors']}")
+            return self._publish_cmd_result(cab, "hw-config", command_id, "FAILED", {
+                "errorCode": "INVALID_CONFIG", "errorMessage": "; ".join(outcome["errors"]),
+                "errors": outcome["errors"]})
+        cfg, warnings = hardware_config.functional(outcome["config"]), outcome["warnings"]
+        for warning in warnings:
+            logger.error(warning)
         logger.warning(f"🛠 HW-CONFIG {command_id} saved — restarting with relay {cfg['relayPins']}, "
                        f"door {cfg['doorPins']}")
         payload = {"commandId": command_id, "status": "ACCEPTED", "config": cfg, "warnings": warnings,
@@ -408,47 +401,6 @@ class LockerService:
         if not self.mqtt.publish_and_wait(topic, json.dumps(payload), qos=1, timeout=RESTART_RESULT_TIMEOUT):
             logger.error(f"HW-CONFIG {command_id}: broker chưa xác nhận kết quả — vẫn khởi động lại")
         self._restart_process(command_id)
-
-    @staticmethod
-    def _sync_lid_tuning(cfg: dict):
-        """Chiều mở và mức công tắc trong lid_tuning.json ghi đè `.env` ⇒ đổi theo cấu hình mới."""
-        path = settings.LID_TUNING_FILE
-        try:
-            with open(path, encoding="utf-8") as f:
-                tuning = json.load(f)
-        except (FileNotFoundError, ValueError):
-            return
-        changed = False
-        for lid in cfg["lids"]:
-            saved = tuning.get(str(lid["axis"]))
-            if isinstance(saved, dict):
-                saved["open_dir_high"] = lid["openDirHigh"]
-                saved["limit_active_low"] = lid["limitActiveLow"]
-                changed = True
-        if changed:
-            tmp = f"{path}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(tuning, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
-
-    @staticmethod
-    def _update_boot_relay_pins(pins: list) -> Optional[str]:
-        """Chạy scripts/boot_relay_pins.py bằng sudo. Trả cảnh báo (chuỗi) nếu không làm được."""
-        if settings.HARDWARE_BACKEND != "gpio":
-            return None
-        csv = ",".join(str(int(p)) for p in pins)
-        try:
-            done = subprocess.run(["sudo", "-n", "python3", settings.BOOT_RELAY_SCRIPT, csv],
-                                  capture_output=True, text=True, timeout=20)
-            report = json.loads(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else {}
-            if done.returncode == 0 and report.get("ok"):
-                return None
-            reason = report.get("error") or done.stderr.strip() or f"mã {done.returncode}"
-        except (OSError, subprocess.SubprocessError, ValueError) as e:
-            reason = str(e)
-        logger.error(f"Boot relay pins not updated: {reason}")
-        return (f"Chưa cập nhật được dòng giữ relay ở mức thấp lúc khởi động ({reason}). "
-                f"Chạy tay trên Pi: sudo python3 scripts/boot_relay_pins.py {csv}")
 
     def _lid_for(self, data: dict, slot_index: Optional[int]):
         """Nắp trượt chỉ dùng khi lệnh ghi rõ `lid: true` — luồng drone thả hàng qua nóc tủ.

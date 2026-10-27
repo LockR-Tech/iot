@@ -74,7 +74,9 @@ def main():
         lids[axis] = lid
 
     app = FastAPI(title="Bảng điều khiển tủ (giả lập)")
-    app.include_router(create_service_router(ServicePanel(locker, lids, _Cabinet(args.locker), settings)))
+    app.include_router(create_service_router(ServicePanel(
+        locker, lids, _Cabinet(args.locker), settings,
+        restart=lambda: print("(giả lập) Đã lưu cấu hình — trên Pi thật bộ điều khiển sẽ khởi động lại"))))
     print(f"Mở http://127.0.0.1:{args.port}/service")
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 
