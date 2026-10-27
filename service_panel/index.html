@@ -147,6 +147,11 @@ td.mono { white-space: nowrap; }
 .cfg .chk { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
 .cfg td select { min-width: 150px; }
 .cfg td input[type=text] { min-width: 90px; }
+.cfg input[type=password] { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 100%; min-width: 0; }
+.cfg input.bad { border-color: var(--danger); }
+.cfg .nets { display: flex; flex-wrap: wrap; gap: 6px; }
+.cfg .nets button { font-size: 13px; padding: 3px 9px; }
+.stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -218,7 +223,11 @@ td.mono { white-space: nowrap; }
   </section>
 
   <!-- Cấu hình: bản đồ chân + sơ đồ đấu dây, sửa và lưu ngay trên Pi -->
-  <section data-pane="config" class="panel cfg" id="cfg"><p class="muted">Đang tải cấu hình…</p></section>
+  <div data-pane="config" class="stack">
+    <section class="panel cfg" id="cfg"><p class="muted">Đang tải cấu hình…</p></section>
+    <!-- Wi-Fi: thao tác ngay (không qua nút Lưu ở trên) -->
+    <section class="panel cfg" id="wifi"></section>
+  </div>
 
   <!-- Nhật ký -->
   <section data-pane="log" class="panel log">
@@ -262,7 +271,7 @@ function showTab(name) {
   document.querySelectorAll('nav.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === name));
   document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== name);
   store.set('panel-tab', name);
-  if (name === 'config') setTimeout(() => loadHardware(), 0);   // sau khi script chạy xong (biến hw đã khai báo)
+  if (name === 'config') setTimeout(() => { loadHardware(); loadWifi(); }, 0);   // sau khi script chạy xong (biến hw, wf đã khai báo)
 }
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 const TABS = ['boxes', 'axes', 'pins', 'config', 'log'];
@@ -662,7 +671,7 @@ function hwIssues() {
     if (owner.has(b)) out.push(`Ô ${b} không thể nằm dưới cả trục ${owner.get(b)} và trục ${l.axis}`);
     owner.set(b, l.axis);
   }));
-  return [...out, ...rowIssues(hw.wiring)];
+  return [...out, ...rowIssues(hw.wiring), ...sysIssues(hw.sys)];
 }
 // Cảnh báo (không chặn lưu): phương án của trục chưa bật đụng chân đang dùng.
 function hwWarnings() {
@@ -673,6 +682,10 @@ function hwWarnings() {
     const busy = use.get(PIN_TO_GPIO[r.pin]);
     if (busy) out.push(`Chân ${r.pin} (GPIO${PIN_TO_GPIO[r.pin]}) đang là ${busy.join(', ')}; ${roleInfo(r.role)[0]} (trục chưa bật) dự kiến cũng dùng chân này — đổi một bên trước khi bật trục ${m[1]}.`);
   });
+  const cab = data && data.system && data.system.cabinet, id = hw.sys.lockerId;
+  if (id === '1') out.push('Mã tủ 1 thường không phải tủ này — kiểm tra đúng id tủ trên admin trước khi lưu.');
+  else if (cab && id && id !== String(cab.id)) out.push(`Mã tủ ${id} khác tủ Pi đang phục vụ (id ${cab.id}) — lưu xong Pi sẽ nhận lệnh của tủ ${id}.`);
+  if (hw.sys.hardwareBackend !== hw.sysRun.hardwareBackend) out.push('Đổi cách điều khiển khoá: kiểm tra dây trước khi lưu, bản đồ chân relay chỉ dùng với GPIO.');
   return out;
 }
 async function loadHardware(force) {
@@ -680,7 +693,8 @@ async function loadHardware(force) {
   try {
     const r = await api('/hardware');
     hw = { cfg: clone(r.running), wiring: r.wiring, defaultWiringRows: r.defaultWiringRows, running: r.running,
-           saved: r.saved, defaultWiring: r.defaultWiring, dirty: false, busy: false };
+           saved: r.saved, defaultWiring: r.defaultWiring, dirty: false, busy: false,
+           sys: sysEditable(r.system), sysRun: r.system };
     renderConfig();
   } catch (e) { $('#cfg').innerHTML = `<p class="note err">Không đọc được cấu hình: ${esc(e.message)}</p>`; }
 }
@@ -767,6 +781,7 @@ function renderConfig() {
     </div>
     <h2>Nắp trượt</h2>
     <div class="grid2">${lidCards}</div>
+    ${renderSystem()}
     <div class="row" style="justify-content:space-between"><h2>Bảng đấu nối</h2>
       <span class="row">${hw.defaultWiring ? '<span class="badge warn">Chưa lưu — đang hiện bảng mẫu TU01</span>' : ''}
         <button type="button" data-act="w-add">+ Thêm dòng</button>
@@ -833,6 +848,12 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('input', e => {   // gõ chữ: không vẽ lại để khỏi mất con trỏ
   const t = e.target;
+  if (hw && t.dataset.sys && t.closest('#cfg')) {
+    sysInput(t);
+    if (t.dataset.sys === 'mqttTransport' || t.dataset.sys === 'bleEnabled') renderConfig();   // hiện/ẩn ô phụ
+    else renderConfigStatus();
+    return;
+  }
   if (!hw || !t.closest('#cfg') || t.dataset.w === undefined || t.tagName !== 'INPUT') return;
   hw.wiring[+t.dataset.w][t.dataset.f] = t.value;
   hw.dirty = true;
@@ -867,7 +888,7 @@ async function saveHardware() {
   hw.busy = true; renderConfigStatus();
   $('#cfgSaveNote').textContent = 'Đang lưu…';
   try {
-    const r = await api('/hardware', { method: 'PUT', body: { config: hw.cfg, wiring: hw.wiring } });
+    const r = await api('/hardware', { method: 'PUT', body: { config: hw.cfg, wiring: hw.wiring, system: sysPayload() } });
     (r.warnings || []).forEach(w => toast(w, true));
     hw.dirty = false;
     if (r.restarting) {
@@ -876,7 +897,7 @@ async function saveHardware() {
       setTimeout(() => loadHardware(true), 12000);
       return;
     }
-    toast('Đã lưu bảng đấu nối.');
+    toast('Đã lưu (không cần khởi động lại).');
     loadHardware(true);
   } catch (err) {
     hw.busy = false;
@@ -885,6 +906,182 @@ async function saveHardware() {
     renderConfigStatus();
   }
 }
+
+// ─── Kết nối & Nâng cao (đè .env như bản đồ chân; mật khẩu không bao giờ gửi về trang) ───
+const SYS_INT = ['mqttPort', 'mqttPortSsl', 'doorSettleMs'];
+function sysEditable(run) {
+  const out = clone(run);
+  delete out.mqttPasswordSet;
+  Object.keys(out).forEach(k => { if (out[k] === null) out[k] = ''; });
+  out.mqttPassword = '';
+  return out;
+}
+function sysIssues(s) {
+  const out = [], port = p => Number.isInteger(p) && p >= 1 && p <= 65535;
+  if (s.lockerId !== '' && !/^\d{1,10}$/.test(s.lockerId)) out.push('Mã tủ phải là số (id tủ trên admin) hoặc để trống');
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(s.mqttBroker)) out.push('Địa chỉ broker MQTT không hợp lệ (tên máy hoặc IP, không có http://)');
+  if (!port(s.mqttPort) || !port(s.mqttPortSsl)) out.push('Cổng MQTT phải từ 1 tới 65535');
+  if (!/^\/\S{0,99}$/.test(s.mqttWsPath)) out.push('Đường dẫn WebSocket phải bắt đầu bằng / và không có khoảng trắng');
+  if (/\s/.test(s.mqttUsername)) out.push('Tài khoản MQTT không được có khoảng trắng');
+  if (s.mqttPassword && !s.mqttUseTls) out.push('Có mật khẩu MQTT thì phải bật TLS');
+  if (s.backendApiUrl !== '' && !/^https?:\/\/[^\s"'<>]{1,200}$/.test(s.backendApiUrl)) out.push('Địa chỉ backend phải dạng https://…');
+  if (!(Number.isInteger(s.doorSettleMs) && s.doorSettleMs >= 0 && s.doorSettleMs <= 10000)) out.push('Thời gian chờ cửa bật phải từ 0 tới 10000 ms');
+  if (s.bleDeviceName.length > 29) out.push('Tên Bluetooth tối đa 29 ký tự');
+  return out;
+}
+function sysField(k, label, kind, extra = '') {
+  const v = hw.sys[k], run = hw.sysRun[k];
+  const shown = kind === 'bool' ? (x => x ? 'bật' : 'tắt') : null;
+  let input;
+  if (kind === 'bool') input = `<label class="chk"><input type="checkbox" data-sys="${k}" data-kind="bool"${v ? ' checked' : ''}> ${label}</label>`;
+  else if (kind === 'int') input = `<input type="number" data-sys="${k}" data-kind="int" value="${Number.isFinite(v) ? v : ''}" ${extra}>`;
+  else input = `<input type="text" data-sys="${k}" value="${esc(v)}" ${extra}>`;
+  return kind === 'bool' ? `<div>${input}${runHint(run, v, shown)}</div>` : `<label class="f">${label}${input}${runHint(run, v, shown)}</label>`;
+}
+function sysSelect(k, label, options) {
+  const v = hw.sys[k];
+  return `<label class="f">${label}<select data-sys="${k}">${options.map(([val, name]) =>
+    `<option value="${val}"${String(v) === val ? ' selected' : ''}>${name}</option>`).join('')}</select>${runHint(String(hw.sysRun[k]), String(v), x => (options.find(o => o[0] === x) || [, x])[1])}</label>`;
+}
+function renderSystem() {
+  const s = hw.sys, cab = data && data.system && data.system.cabinet;
+  return `
+    <h2>Kết nối máy chủ</h2>
+    <p class="small muted">Pi nhận lệnh qua MQTT và gọi API backend. Đổi mục nào ⇒ bộ điều khiển khởi động lại. Sai broker/mật khẩu thì tủ mất kết nối với web (bảng này vẫn dùng được để sửa lại).
+      ${cab ? `Hiện đang phục vụ tủ <b>${esc(cab.name || '')}</b> (id ${esc(cab.id)}).` : ''}</p>
+    <div class="grid2">
+      ${sysField('lockerId', 'Mã tủ (id số trên admin; trống = chờ admin gán)', 'str', 'inputmode="numeric" maxlength="10"')}
+      ${sysField('backendApiUrl', 'Địa chỉ backend', 'str', 'placeholder="https://…" maxlength="200"')}
+      ${sysField('mqttBroker', 'Broker MQTT (tên máy hoặc IP)', 'str', 'maxlength="253"')}
+      ${sysSelect('mqttTransport', 'Kiểu kết nối MQTT', [['tcp', 'TCP'], ['websockets', 'WebSocket']])}
+      ${sysField('mqttPort', 'Cổng không mã hoá', 'int', 'min="1" max="65535"')}
+      ${sysField('mqttPortSsl', 'Cổng TLS', 'int', 'min="1" max="65535"')}
+      ${s.mqttTransport === 'websockets' ? sysField('mqttWsPath', 'Đường dẫn WebSocket', 'str', 'maxlength="100"') : ''}
+      ${sysField('mqttUsername', 'Tài khoản MQTT', 'str', 'autocomplete="off" maxlength="128"')}
+      <label class="f">Mật khẩu MQTT<input type="password" data-sys="mqttPassword" value="${esc(s.mqttPassword)}" autocomplete="new-password" maxlength="256"
+        placeholder="${hw.sysRun.mqttPasswordSet ? 'đã đặt — để trống = giữ nguyên' : 'chưa đặt'}"></label>
+      ${sysField('mqttUseTls', 'Dùng TLS (mã hoá) khi nối broker', 'bool')}
+    </div>
+    <h2>Nâng cao</h2>
+    <div class="grid2">
+      ${sysSelect('hardwareBackend', 'Cách điều khiển khoá', [['gpio', 'GPIO trên Pi (module relay)'], ['rs485', 'Board khoá RS485 qua USB']])}
+      ${sysField('doorSettleMs', 'Chờ cửa bật ra trước khi đọc cảm biến (ms, 0–10000)', 'int', 'min="0" max="10000" step="50"')}
+      ${sysSelect('lidStepActiveLow', 'Xung PUL/DIR của driver nắp', [['true', 'tích cực mức thấp (PUL+/DIR+ lên 3,3 V)'], ['false', 'tích cực mức cao (PUL−/DIR− xuống GND)']])}
+      ${sysField('bleEnabled', 'Bật mở ô bằng Bluetooth', 'bool')}
+      ${s.bleEnabled ? sysField('bleDeviceName', 'Tên Bluetooth (tối đa 29 ký tự)', 'str', 'maxlength="29"') : ''}
+    </div>`;
+}
+function sysInput(t) {
+  const k = t.dataset.sys;
+  if (t.dataset.kind === 'bool') hw.sys[k] = t.checked;
+  else if (t.dataset.kind === 'int') hw.sys[k] = t.value === '' ? NaN : Number(t.value);
+  else if (k === 'lidStepActiveLow') hw.sys[k] = t.value === 'true';
+  else hw.sys[k] = t.value;
+  hw.dirty = true;
+}
+function sysPayload() {
+  const out = clone(hw.sys);
+  if (!out.mqttPassword) delete out.mqttPassword;   // trống = giữ mật khẩu đang có
+  return out;
+}
+
+/* ─── Wi-Fi: lưu mạng không làm rớt mạng đang dùng; "Chuyển ngay" tự quay về nếu mạng mới không vào được ─── */
+let wf = { st: null, err: null, scan: null, busy: false, form: { ssid: '', password: '', priority: 10 }, poll: null };
+async function loadWifi() {
+  try { wf.st = await api('/wifi'); wf.err = null; } catch (e) { wf.err = e.message; }
+  renderWifi();
+}
+function renderWifi() {
+  const el = $('#wifi');
+  if (!el) return;
+  const head = '<h2>Wi-Fi</h2>';
+  if (!wf.st) { el.innerHTML = head + (wf.err ? `<p class="note err">${esc(wf.err)}</p>` : '<p class="muted">Đang đọc…</p>'); return; }
+  const st = wf.st, last = st.lastSwitch, f = wf.form, dis = wf.busy ? ' disabled' : '';
+  const lastNote = wf.poll ? `<p class="note">Đang chuyển mạng… Nếu trang mất kết nối, đợi 1–2 phút rồi vào lại Pi.</p>`
+    : !last ? '' : last.ok ? `<p class="note">Lần chuyển gần nhất: đã vào <b>${esc(last.target)}</b>.</p>`
+    : `<p class="note err">Lần chuyển gần nhất sang <b>${esc(last.target)}</b> không được (${esc(last.error || '')}) — ${last.reverted ? `đã tự quay về <b>${esc(last.previous)}</b>` : 'quay về mạng cũ cũng lỗi, kiểm tra Pi'}.</p>`;
+  const rows = st.saved.map(n => `<tr>
+      <td><b>${esc(n.name)}</b>${n.ssid !== n.name ? ` <span class="small muted">(${esc(n.ssid)})</span>` : ''}</td>
+      <td>${n.active ? '<span class="badge ok">Đang dùng</span>' : n.autoconnect ? '<span class="small muted">tự vào khi có</span>' : '<span class="small muted">không tự vào</span>'}</td>
+      <td><input type="number" min="-999" max="999" value="${n.priority}" data-wprio="${esc(n.name)}" style="width:90px"></td>
+      <td class="acts"><button type="button" data-wact="prio" data-name="${esc(n.name)}"${dis}>Đặt ưu tiên</button>
+        <button type="button" data-wact="switch" data-name="${esc(n.name)}"${n.active ? ' disabled' : dis}>Chuyển ngay</button>
+        <button type="button" data-wact="del" data-name="${esc(n.name)}" title="Xoá mạng"${n.active ? ' disabled' : dis}>✕</button></td></tr>`).join('');
+  el.innerHTML = `${head}
+    <p class="small muted">IP hiện tại: <b class="mono">${esc(st.ip || 'chưa có')}</b>. Pi tự vào mạng đã lưu đang phát có <b>ưu tiên cao nhất</b>. Lưu mạng mới <b>không</b> làm rớt mạng đang dùng — khi đem tủ sang chỗ khác, Pi tự vào mạng đó. "Chuyển ngay" thử mạng mới khoảng 1 phút, không vào được thì tự quay về mạng cũ.</p>
+    ${lastNote}
+    <div class="tablewrap"><table><thead><tr><th>Mạng đã lưu</th><th>Trạng thái</th><th>Ưu tiên</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4" class="muted">Chưa lưu mạng nào</td></tr>'}</tbody></table></div>
+    <h2>Thêm hoặc sửa mạng</h2>
+    <div class="grid2">
+      <label class="f">Tên Wi-Fi (SSID)<input type="text" data-wf="ssid" value="${esc(f.ssid)}" maxlength="32" autocomplete="off"></label>
+      <label class="f">Mật khẩu (8–63 ký tự; trống = mạng mở, hoặc giữ mật khẩu cũ khi sửa)<input type="password" data-wf="password" value="${esc(f.password)}" maxlength="63" autocomplete="new-password"></label>
+      <label class="f">Ưu tiên (cao hơn được chọn trước)<input type="number" data-wf="priority" value="${f.priority}" min="-999" max="999"></label>
+    </div>
+    <div class="row"><button type="button" class="primary" data-wact="add"${dis}>Lưu Wi-Fi</button>
+      <button type="button" data-wact="scan"${dis}>${wf.busy === 'scan' ? 'Đang quét…' : 'Quét mạng xung quanh'}</button></div>
+    ${wf.scan ? `<div class="nets">${wf.scan.length ? wf.scan.map(n =>
+      `<button type="button" data-wact="pick" data-name="${esc(n.ssid)}" title="${esc(n.security || 'mạng mở')}">${esc(n.ssid)} · ${n.signal}%${n.security ? '' : ' · mở'}</button>`).join('') : '<span class="muted small">Không thấy mạng nào</span>'}</div>` : ''}`;
+}
+async function wifiAction(fn, okMsg) {
+  wf.busy = true; renderWifi();
+  try { const r = await fn(); if (okMsg) toast(okMsg); return r; }
+  catch (e) { toast(e.message, true); }
+  finally { wf.busy = false; await loadWifi(); }
+}
+function watchSwitch() {        // đợi file kết quả của lần chuyển; trang có thể mất kết nối giữa chừng
+  clearInterval(wf.poll);
+  const started = Date.now();
+  wf.poll = setInterval(async () => {
+    try { wf.st = await api('/wifi'); } catch (e) { return; }
+    if (wf.st.lastSwitch || Date.now() - started > 180000) {
+      clearInterval(wf.poll); wf.poll = null;
+      const last = wf.st.lastSwitch;
+      if (last) toast(last.ok ? `Đã chuyển sang ${last.target}` : `Không vào được ${last.target} — ${last.reverted ? 'đã quay về ' + last.previous : 'quay về cũng lỗi'}`, !last.ok);
+    }
+    renderWifi();
+  }, 4000);
+  renderWifi();
+}
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset.wf) wf.form[t.dataset.wf] = t.dataset.wf === 'priority' ? Number(t.value) : t.value;
+});
+document.addEventListener('click', async e => {
+  const b = e.target.closest('#wifi button[data-wact]');
+  if (!b || wf.busy) return;
+  const name = b.dataset.name, path = name !== undefined ? '/wifi/' + encodeURIComponent(name) : '';
+  const act = b.dataset.wact;
+  if (act === 'pick') { wf.form.ssid = name; wf.form.password = ''; renderWifi(); return; }
+  if (act === 'scan') {
+    wf.busy = 'scan'; renderWifi();
+    try { wf.scan = await api('/wifi/scan'); } catch (err) { toast(err.message, true); }
+    wf.busy = false; renderWifi(); return;
+  }
+  if (act === 'add') {
+    const f = wf.form;
+    if (!f.ssid) return toast('Nhập tên Wi-Fi', true);
+    if (f.password && (f.password.length < 8 || f.password.length > 63)) return toast('Mật khẩu Wi-Fi phải từ 8 tới 63 ký tự', true);
+    const r = await wifiAction(() => api('/wifi', { method: 'POST', body: { ssid: f.ssid, password: f.password || null, priority: Number.isInteger(f.priority) ? f.priority : 10 } }));
+    if (r) { toast(r.updated ? `Đã cập nhật ${r.name}` : `Đã lưu ${r.name}. Pi sẽ tự vào khi có mạng này (hoặc bấm Chuyển ngay).`); wf.form = { ssid: '', password: '', priority: 10 }; renderWifi(); }
+    return;
+  }
+  if (act === 'prio') {
+    const v = Number(document.querySelector(`#wifi input[data-wprio="${CSS.escape(name)}"]`).value);
+    if (!Number.isInteger(v)) return toast('Ưu tiên phải là số nguyên', true);
+    return wifiAction(() => api(path + '/priority', { method: 'PUT', body: { priority: v } }), `Ưu tiên ${name}: ${v}`);
+  }
+  if (act === 'del') {
+    if (!confirm(`Xoá mạng ${name} khỏi Pi?`)) return;
+    return wifiAction(() => api(path, { method: 'DELETE' }), `Đã xoá ${name}`);
+  }
+  if (act === 'switch') {
+    const cur = (wf.st.saved.find(n => n.active) || {}).name;
+    if (!confirm(`Chuyển Pi sang ${name}?\n\nPi thử vào mạng này khoảng 1 phút; không vào được sẽ tự quay về ${cur}.\nTrong lúc chuyển, trang này và SSH sẽ mất kết nối. Nếu vào được mạng mới, máy bạn phải cùng mạng ${name} mới vào lại Pi được.`)) return;
+    const r = await wifiAction(() => api(path + '/switch', { method: 'POST' }));
+    if (r) watchSwitch();
+  }
+});
 
 refresh();
 loadLayout();

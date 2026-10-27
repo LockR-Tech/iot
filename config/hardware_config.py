@@ -163,7 +163,8 @@ def save(cfg: dict, path: str = DEFAULT_FILE):
     if os.path.exists(path):
         os.replace(path, f"{path}.bak")
     tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # Có thể chứa mật khẩu MQTT (mục Kết nối) ⇒ chỉ chủ file đọc được, như `.env`.
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
@@ -183,7 +184,126 @@ def apply_overlay(path: Optional[str] = None) -> Optional[dict]:
     if validate(cfg):
         return None
     os.environ.update(to_env(cfg))
+    system = cfg.get("system")
+    if isinstance(system, dict) and not validate_system(system):
+        os.environ.update(system_to_env(system))
     return cfg
+
+
+# ─── kết nối & nâng cao (mục "Kết nối", "Nâng cao" của tab Cấu hình trên Pi) ───
+# trường → (biến môi trường, kiểu). Chỉ sửa trên Pi; lệnh hw-config từ admin giữ nguyên phần này.
+SYSTEM_FIELDS = {
+    "lockerId": ("LOCKER_ID", "str"),
+    "mqttBroker": ("MQTT_BROKER", "str"),
+    "mqttPort": ("MQTT_PORT", "int"),
+    "mqttPortSsl": ("MQTT_PORT_SSL", "int"),
+    "mqttUseTls": ("MQTT_USE_TLS", "bool"),
+    "mqttTransport": ("MQTT_TRANSPORT", "str"),
+    "mqttWsPath": ("MQTT_WS_PATH", "str"),
+    "mqttUsername": ("MQTT_USERNAME", "str"),
+    "mqttPassword": ("MQTT_PASSWORD", "secret"),
+    "backendApiUrl": ("BACKEND_API_URL", "str"),
+    "doorSettleMs": ("DOOR_SETTLE_MS", "int"),
+    "lidStepActiveLow": ("LID_STEP_ACTIVE_LOW", "bool"),
+    "hardwareBackend": ("HARDWARE_BACKEND", "str"),
+    "bleEnabled": ("BLE_ENABLED", "bool"),
+    "bleDeviceName": ("BLE_DEVICE_NAME", "str"),
+}
+_HOST = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+_URL = re.compile(r"^https?://[^\s\"'<>]{1,200}$")
+_PRINTABLE = re.compile(r"^[^\x00-\x1f\x7f]*$")
+
+
+def validate_system(system) -> list:
+    """Lỗi của phần Kết nối/Nâng cao (rỗng = hợp lệ). Thiếu trường nào thì trường đó giữ theo `.env`."""
+    if not isinstance(system, dict):
+        return ["Phần kết nối phải là một đối tượng JSON"]
+    errors = []
+    for key, value in system.items():
+        if key not in SYSTEM_FIELDS:
+            errors.append(f"Không có tuỳ chọn {key}")
+            continue
+        kind = SYSTEM_FIELDS[key][1]
+        if kind == "bool" and not isinstance(value, bool):
+            errors.append(f"{key} phải là true hoặc false")
+        elif kind == "int" and (not isinstance(value, int) or isinstance(value, bool)):
+            errors.append(f"{key} phải là số nguyên")
+        elif kind in ("str", "secret") and not isinstance(value, str):
+            errors.append(f"{key} phải là chuỗi")
+    if errors:
+        return errors
+    lid = system.get("lockerId")
+    if lid not in (None, "") and not (lid.isdigit() and len(lid) <= 10):
+        errors.append("Mã tủ phải là số (id tủ trên admin) hoặc để trống")
+    broker = system.get("mqttBroker")
+    if broker is not None and not _HOST.match(broker):
+        errors.append("Địa chỉ broker MQTT không hợp lệ (tên máy hoặc IP, không có http://)")
+    for key in ("mqttPort", "mqttPortSsl"):
+        if key in system and not 1 <= system[key] <= 65535:
+            errors.append(f"Cổng {key} phải từ 1 tới 65535")
+    if system.get("mqttTransport") not in (None, "tcp", "websockets"):
+        errors.append("Kiểu kết nối MQTT phải là tcp hoặc websockets")
+    ws = system.get("mqttWsPath")
+    if ws is not None and not (ws.startswith("/") and len(ws) <= 100 and _PRINTABLE.match(ws) and " " not in ws):
+        errors.append("Đường dẫn WebSocket phải bắt đầu bằng / và không có khoảng trắng")
+    user = system.get("mqttUsername")
+    if user is not None and (len(user) > 128 or not _PRINTABLE.match(user) or " " in user):
+        errors.append("Tài khoản MQTT không hợp lệ")
+    pw = system.get("mqttPassword")
+    if pw is not None and (len(pw) > 256 or not _PRINTABLE.match(pw)):
+        errors.append("Mật khẩu MQTT quá dài hoặc có ký tự điều khiển")
+    if pw and system.get("mqttUseTls") is False:
+        errors.append("Có mật khẩu MQTT thì phải bật TLS (Pi không gửi mật khẩu qua kết nối không mã hoá)")
+    url = system.get("backendApiUrl")
+    if url not in (None, "") and not _URL.match(url):
+        errors.append("Địa chỉ backend phải dạng https://…")
+    if "doorSettleMs" in system and not 0 <= system["doorSettleMs"] <= 10000:
+        errors.append("Thời gian chờ cửa bật phải từ 0 tới 10000 ms")
+    if system.get("hardwareBackend") not in (None, "gpio", "rs485"):
+        errors.append("Phần cứng phải là gpio hoặc rs485")
+    name = system.get("bleDeviceName")
+    if name is not None and (len(name) > 29 or not _PRINTABLE.match(name)):
+        errors.append("Tên Bluetooth tối đa 29 ký tự")
+    return errors
+
+
+def system_to_env(system: dict) -> dict:
+    env = {}
+    for key, value in system.items():
+        name, kind = SYSTEM_FIELDS[key]
+        env[name] = ("true" if value else "false") if kind == "bool" else str(value)
+    return env
+
+
+def effective_system(settings) -> dict:
+    """Kết nối/Nâng cao đang chạy. Không bao giờ trả mật khẩu — chỉ cho biết đã đặt hay chưa."""
+    return {
+        "lockerId": str(settings.LOCKER_ID or ""),
+        "mqttBroker": settings.MQTT_BROKER,
+        "mqttPort": int(settings.MQTT_PORT),
+        "mqttPortSsl": int(settings.MQTT_PORT_SSL),
+        "mqttUseTls": bool(settings.MQTT_USE_TLS),
+        "mqttTransport": settings.MQTT_TRANSPORT,
+        "mqttWsPath": settings.MQTT_WS_PATH,
+        "mqttUsername": settings.MQTT_USERNAME,
+        "mqttPasswordSet": bool(settings.MQTT_PASSWORD),
+        "backendApiUrl": settings.BACKEND_API_URL,
+        "doorSettleMs": int(settings.DOOR_SETTLE_MS),
+        "lidStepActiveLow": bool(settings.LID_STEP_ACTIVE_LOW),
+        "hardwareBackend": settings.HARDWARE_BACKEND,
+        "bleEnabled": bool(settings.BLE_ENABLED),
+        "bleDeviceName": settings.BLE_DEVICE_NAME,
+    }
+
+
+def merge_system(new: dict, saved: Optional[dict]) -> dict:
+    """Bỏ trường chỉ để hiển thị; mật khẩu để trống ⇒ giữ mật khẩu đã lưu (không có thì giữ `.env`)."""
+    out = {k: v for k, v in new.items() if k in SYSTEM_FIELDS}
+    if not out.get("mqttPassword"):
+        out.pop("mqttPassword", None)
+        if saved and saved.get("mqttPassword"):
+            out["mqttPassword"] = saved["mqttPassword"]
+    return out
 
 
 # ─── bảng đấu nối: mỗi dòng có chân Pi (1–40) và vai trò ───
@@ -312,7 +432,7 @@ def load_default_wiring(path: str = DEFAULT_WIRING_FILE) -> list:
 
 def functional(cfg: dict) -> dict:
     """Phần Pi dùng để chạy (bỏ sơ đồ đấu dây), ô dưới nắp xếp tăng dần — để so hai cấu hình."""
-    out = {k: v for k, v in cfg.items() if k != "wiring"}
+    out = {k: v for k, v in cfg.items() if k not in ("wiring", "system")}
     out["lids"] = [{**lid, "boxes": sorted(lid.get("boxes", []))}
                    for lid in sorted(cfg.get("lids", []), key=lambda l: l.get("axis", 0))]
     return out
@@ -356,10 +476,10 @@ def update_boot_relay_pins(pins: list, script: str, backend: str) -> Optional[st
             f"Chạy tay trên Pi: sudo python3 scripts/boot_relay_pins.py {csv}")
 
 
-def store(cfg, settings, wiring: Optional[list] = None) -> dict:
+def store(cfg, settings, wiring: Optional[list] = None, system: Optional[dict] = None) -> dict:
     """Đường lưu chung của lệnh hw-config (admin web) và nút Lưu trên bảng /service.
 
-    Kiểm tra ⇒ ghi file (giữ sơ đồ đấu dây cũ nếu `wiring` là None) ⇒ đồng bộ lid_tuning.json ⇒ đổi
+    Kiểm tra ⇒ ghi file (giữ sơ đồ đấu dây / kết nối cũ nếu `wiring` / `system` là None) ⇒ đồng bộ lid_tuning.json ⇒ đổi
     chân relay thì cập nhật dòng an toàn lúc khởi động. Trả {"errors", "warnings", "config"}; có lỗi
     thì không ghi gì. Việc khởi động lại để Pi chạy theo bản mới là của nơi gọi.
     """
@@ -369,15 +489,24 @@ def store(cfg, settings, wiring: Optional[list] = None) -> dict:
     if errors:
         return {"errors": errors, "warnings": [], "config": cfg}
     path = settings.HARDWARE_CONFIG_FILE
+    saved = load(path) or {}
     if wiring is None:
-        wiring = (load(path) or {}).get("wiring")
+        wiring = saved.get("wiring")
+    if system is None:
+        system = saved.get("system")
+    else:
+        system = merge_system(system, saved.get("system"))
+        system_errors = validate_system(system)
+        if system_errors:
+            return {"errors": system_errors, "warnings": [], "config": cfg}
     rows = None
     if wiring is not None:
         rows = sync_rows(cfg, sanitize_wiring(wiring))   # chân của dòng tín hiệu luôn theo bản đồ chân
         row_errors = validate_rows(rows)
         if row_errors:
             return {"errors": row_errors, "warnings": [], "config": cfg}
-    cfg = {**functional(cfg), **({"wiring": rows} if rows is not None else {})}
+    cfg = {**functional(cfg), **({"wiring": rows} if rows is not None else {}),
+           **({"system": system} if system else {})}
     save(cfg, path)
     sync_lid_tuning(cfg, settings.LID_TUNING_FILE)
     warnings = []

@@ -341,5 +341,59 @@ class ServicePanelConfigTest(unittest.TestCase):
             hardware_config.sanitize_wiring([{"from": "x"}] * (hardware_config.MAX_WIRING_ROWS + 1))
 
 
+class SystemSettingsTest(unittest.TestCase):
+    """Mục Kết nối / Nâng cao của tab Cấu hình: chỉ sửa trên Pi, mật khẩu không bao giờ trả ra."""
+
+    setUp = ServicePanelConfigTest.setUp
+    tearDown = ServicePanelConfigTest.tearDown
+
+    def _system(self, **changes):
+        system = {k: v for k, v in self.panel.hw_config()["system"].items() if k != "mqttPasswordSet"}
+        system.update(changes)
+        return system
+
+    def test_unchanged_system_does_not_restart(self):
+        hw = self.panel.hw_config()
+        self.assertNotIn("mqttPassword", hw["system"])
+        r = self.panel.save_hw_config(hw["running"], [], self._system())
+        self.assertFalse(r["restarting"])
+
+    def test_changed_broker_saves_and_restarts(self):
+        running = self.panel.hw_config()["running"]
+        r = self.panel.save_hw_config(running, [], self._system(mqttBroker="mqtt.example.org", lockerId="7"))
+        self.assertTrue(r["restarting"])
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["system"]["mqttBroker"], "mqtt.example.org")
+        self.assertNotIn("system", hardware_config.functional(stored))
+        # lệnh hw-config từ admin (không có system) giữ nguyên phần này
+        hardware_config.store(running, settings)
+        self.assertEqual(json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))["system"]["lockerId"], "7")
+
+    def test_blank_password_keeps_saved_one(self):
+        running = self.panel.hw_config()["running"]
+        self.panel.save_hw_config(running, [], self._system(mqttUseTls=True, mqttPassword="s3cret"))
+        self.panel.save_hw_config(running, [], self._system(mqttUseTls=True, mqttPassword=""))
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["system"]["mqttPassword"], "s3cret")
+
+    def test_bad_values_are_rejected(self):
+        running = self.panel.hw_config()["running"]
+        for bad in ({"lockerId": "CAB-TU01"}, {"mqttPort": 70000}, {"mqttBroker": "http://x"},
+                    {"mqttUseTls": False, "mqttPassword": "p"}, {"backendApiUrl": "ftp://x"},
+                    {"hardwareBackend": "usb"}):
+            with self.assertRaises(ValueError, msg=bad):
+                self.panel.save_hw_config(running, [], self._system(**bad))
+        self.assertFalse(os.path.exists(self.cfg_path))
+        self.assertTrue(hardware_config.validate_system({"unknown": 1}))    # file sửa tay có khoá lạ ⇒ bỏ cả phần
+
+    def test_overlay_applies_system_to_env(self):
+        hardware_config.save({**TU01, "system": {"lockerId": "7", "mqttUseTls": True, "doorSettleMs": 500}},
+                             self.cfg_path)
+        with mock.patch.dict(os.environ, {"LOCKER_ID": "1"}):
+            hardware_config.apply_overlay(self.cfg_path)
+            self.assertEqual(os.environ["LOCKER_ID"], "7")
+            self.assertEqual(os.environ["MQTT_USE_TLS"], "true")
+            self.assertEqual(os.environ["DOOR_SETTLE_MS"], "500")
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ from typing import Optional
 import uvicorn
 import threading
 import os
+import shutil
 from pathlib import Path
 from utils.logger import get_logger
 from config.settings import settings
@@ -177,8 +178,10 @@ def create_config_app(db_manager, cabinet_state, hardware=None, lids=None):
 
     # ─── Bảng điều khiển kỹ thuật (/service) ───
     from hardware.factory import save_lid_tuning
+    from infracstructure.wifi import WifiManager
     panel = ServicePanel(hardware, lids, cabinet_state, settings,
-                         save_tuning=lambda: save_lid_tuning(settings.LID_TUNING_FILE, lids))
+                         save_tuning=lambda: save_lid_tuning(settings.LID_TUNING_FILE, lids),
+                         wifi=WifiManager() if shutil.which("nmcli") else None)
     app.include_router(create_service_router(panel))
 
     # ─── Static UI Dashboard ───

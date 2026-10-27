@@ -69,7 +69,7 @@ class ServicePanel:
     def __init__(self, hardware, lids: Dict[int, object], cabinet_state, settings,
                  save_tuning: Optional[Callable[[], None]] = None,
                  fetch_json: Optional[Callable[[str], dict]] = None,
-                 restart: Optional[Callable[[], None]] = None):
+                 restart: Optional[Callable[[], None]] = None, wifi=None):
         self.hardware = hardware
         self.lids = lids or {}
         self.cabinet_state = cabinet_state
@@ -78,6 +78,7 @@ class ServicePanel:
         self._fetch_json = fetch_json or _http_get_json
         # Lưu bản đồ chân mới ⇒ khởi động lại tiến trình (systemd chạy lại) để GPIO dựng theo bản mới.
         self._restart = restart or _restart_soon
+        self.wifi = wifi
         self._layout_cache = (0.0, None)
         self._layout_lock = threading.Lock()
         self.actions = deque(maxlen=60)
@@ -279,19 +280,64 @@ class ServicePanel:
             "wiring": rows,
             "defaultWiring": wiring is None,
             "defaultWiringRows": default_rows,
+            "system": hardware_config.effective_system(self.settings),
         }
 
-    def save_hw_config(self, config: dict, wiring: list) -> dict:
-        """Lưu bản đồ chân + sơ đồ đấu dây. Bản đồ chân khác cái đang chạy ⇒ khởi động lại bộ điều khiển."""
+    def _system_changed(self, system: Optional[dict]) -> bool:
+        if not system:
+            return False
+        if system.get("mqttPassword"):
+            return True
+        # .env không đặt ⇒ None; trang gửi về chuỗi rỗng — coi như nhau
+        running = {k: "" if v is None else v for k, v in hardware_config.effective_system(self.settings).items()}
+        return any(running.get(k) != v for k, v in system.items()
+                   if k in hardware_config.SYSTEM_FIELDS and k != "mqttPassword")
+
+    def save_hw_config(self, config: dict, wiring: list, system: Optional[dict] = None) -> dict:
+        """Lưu bản đồ chân + sơ đồ đấu dây + kết nối. Phần chạy khác cái đang chạy ⇒ khởi động lại bộ điều khiển."""
         running = hardware_config.effective(self.settings, self.lids)
-        outcome = hardware_config.store(config, self.settings, wiring)
+        outcome = hardware_config.store(config, self.settings, wiring, system)
         if outcome["errors"]:
             raise ValueError("; ".join(outcome["errors"]))
-        restarting = hardware_config.functional(outcome["config"]) != hardware_config.functional(running)
+        restarting = (hardware_config.functional(outcome["config"]) != hardware_config.functional(running)
+                      or self._system_changed(system))
         self._log("Lưu cấu hình phần cứng" + (" (khởi động lại)" if restarting else " (sơ đồ đấu dây)"), {"result": "OK"})
         if restarting:
             self._restart()
         return {"saved": True, "restarting": restarting, "warnings": outcome["warnings"]}
+
+    # ─── Wi-Fi (tab Cấu hình) ───
+
+    def _wifi(self):
+        if self.wifi is None:
+            raise RuntimeError("Máy này không quản lý Wi-Fi được (không có NetworkManager)")
+        return self.wifi
+
+    def wifi_status(self) -> dict:
+        return self._wifi().status()
+
+    def wifi_scan(self) -> list:
+        return self._wifi().scan()
+
+    def wifi_add(self, ssid, password, priority) -> dict:
+        result = self._wifi().add(ssid, password, priority)
+        self._log(f"Lưu Wi-Fi {result['name']}", {"result": "OK"})
+        return result
+
+    def wifi_priority(self, name, priority) -> dict:
+        result = self._wifi().set_priority(name, priority)
+        self._log(f"Wi-Fi {name}: ưu tiên {priority}", {"result": "OK"})
+        return result
+
+    def wifi_delete(self, name) -> dict:
+        result = self._wifi().delete(name)
+        self._log(f"Xoá Wi-Fi {name}", {"result": "OK"})
+        return result
+
+    def wifi_switch(self, name) -> dict:
+        result = self._wifi().switch(name)
+        self._log(f"Chuyển Wi-Fi {result['from']} → {name} (tự quay về nếu lỗi)", {"result": "OK"})
+        return result
 
 
 def _restart_soon(delay: float = 1.5):
@@ -317,6 +363,17 @@ class OpenBoxRequest(BaseModel):
 class HardwareSaveRequest(BaseModel):
     config: dict
     wiring: list = []
+    system: Optional[dict] = None
+
+
+class WifiAddRequest(BaseModel):
+    ssid: str
+    password: Optional[str] = None
+    priority: int = 10
+
+
+class WifiPriorityRequest(BaseModel):
+    priority: int
 
 
 class JogRequest(BaseModel):
@@ -400,6 +457,30 @@ def create_service_router(panel: ServicePanel) -> APIRouter:
 
     @router.put("/api/hardware")
     def save_hardware(req: HardwareSaveRequest):
-        return _call(panel.save_hw_config, req.config, req.wiring)
+        return _call(panel.save_hw_config, req.config, req.wiring, req.system)
+
+    @router.get("/api/wifi")
+    def wifi_status():
+        return _call(panel.wifi_status)
+
+    @router.get("/api/wifi/scan")
+    def wifi_scan():
+        return _call(panel.wifi_scan)
+
+    @router.post("/api/wifi")
+    def wifi_add(req: WifiAddRequest):
+        return _call(panel.wifi_add, req.ssid, req.password, req.priority)
+
+    @router.put("/api/wifi/{name}/priority")
+    def wifi_priority(name: str, req: WifiPriorityRequest):
+        return _call(panel.wifi_priority, name, req.priority)
+
+    @router.delete("/api/wifi/{name}")
+    def wifi_delete(name: str):
+        return _call(panel.wifi_delete, name)
+
+    @router.post("/api/wifi/{name}/switch")
+    def wifi_switch(name: str):
+        return _call(panel.wifi_switch, name)
 
     return router
