@@ -10,6 +10,7 @@ Không import `config.settings` ở đây: settings.py gọi `apply_overlay` lú
 """
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -185,8 +186,104 @@ def apply_overlay(path: Optional[str] = None) -> Optional[dict]:
     return cfg
 
 
+# ─── bảng đấu nối: mỗi dòng có chân Pi (1–40) và vai trò ───
+# Chân vật lý trên header 40 chân → GPIO (BCM). Chân 27, 28 là EEPROM của HAT, không dùng.
+PIN_TO_GPIO = {3: 2, 5: 3, 7: 4, 29: 5, 31: 6, 26: 7, 24: 8, 21: 9, 19: 10, 23: 11, 32: 12, 33: 13, 8: 14,
+               10: 15, 36: 16, 11: 17, 12: 18, 35: 19, 38: 20, 40: 21, 15: 22, 16: 23, 18: 24, 22: 25, 37: 26, 13: 27}
+GPIO_TO_PIN = {g: p for p, g in PIN_TO_GPIO.items()}
+POWER_PIN_TYPES = {1: "3V3", 17: "3V3", 2: "5V", 4: "5V",
+                   6: "GND", 9: "GND", 14: "GND", 20: "GND", 25: "GND", 30: "GND", 34: "GND", 39: "GND"}
+PIN_TYPE_NAMES = {"GPIO": "GPIO", "3V3": "3,3 V", "5V": "5 V", "GND": "GND"}
+_LID_ROLE_KEY = {"pul": "pulPin", "dir": "dirPin", "home": "homePin", "end": "endPin"}
+_LID_ROLE_NAME = {"pul": "PUL−", "dir": "DIR−", "home": "công tắc gốc", "end": "công tắc cuối",
+                  "pul+": "PUL+", "dir+": "DIR+"}
+ROLE_PATTERN = re.compile(r"^(relay:(\d+|dc\+|dc-)|door:(\d+|gnd)|lid[12]:(pul|dir|home|end|pul\+|dir\+)|switch:(vcc|gnd))$")
+
+
+def pin_type(pin) -> Optional[str]:
+    if pin in PIN_TO_GPIO:
+        return "GPIO"
+    return POWER_PIN_TYPES.get(pin)
+
+
+def role_info(role: str):
+    """(tên tiếng Việt, loại chân cần) của một vai trò; vai trò rỗng = ghi chú tự do."""
+    if not role:
+        return "khác", None
+    kind, _, arg = role.partition(":")
+    if kind == "relay":
+        return ({"dc+": ("nguồn relay DC+", "5V"), "dc-": ("mát relay DC−", "GND")}.get(arg)
+                or (f"relay ô {arg}", "GPIO"))
+    if kind == "door":
+        return ("mát cảm biến cửa", "GND") if arg == "gnd" else (f"cảm biến cửa ô {arg}", "GPIO")
+    if kind == "switch":
+        return ("nguồn công tắc hành trình", "3V3") if arg == "vcc" else ("mát công tắc hành trình", "GND")
+    axis = kind[3:]
+    return f"{_LID_ROLE_NAME[arg]} trục {axis}", ("3V3" if arg.endswith("+") else "GPIO")
+
+
+def signal_roles(cfg: dict) -> dict:
+    """{vai trò: GPIO} mà bản đồ chân đang dùng. Trục chưa bật không tính — dòng của nó là phương án dự kiến."""
+    out = {}
+    for i, gpio in enumerate(cfg["relayPins"]):
+        out[f"relay:{i + 1}"] = gpio
+    for i, gpio in enumerate(cfg["doorPins"]):
+        out[f"door:{i + 1}"] = gpio
+    for lid in cfg["lids"]:
+        if lid.get("enabled"):
+            for short, key in _LID_ROLE_KEY.items():
+                out[f"lid{lid['axis']}:{short}"] = lid[key]
+    return out
+
+
+def _role_group(role: str) -> str:
+    kind = role.split(":", 1)[0]
+    return {"relay": "Relay", "door": "Cảm biến cửa"}.get(kind, f"Nắp trục {kind[3:]}")
+
+
+def sync_rows(cfg: dict, rows: list) -> list:
+    """Cho bảng đấu nối khớp bản đồ chân: dòng tín hiệu nhận đúng chân, thiếu thì thêm, ô đã bỏ thì gỡ vai trò."""
+    rows = [dict(r) for r in rows]
+    want, seen, n = signal_roles(cfg), set(), len(cfg["relayPins"])
+    for row in rows:
+        role = row.get("role") or ""
+        match = re.match(r"^(relay|door):(\d+)$", role)
+        if match and int(match.group(2)) > n:
+            row["role"] = ""
+            row["note"] = f"{row.get('note', '')} (ô đã bỏ)".strip()
+        elif role in want and role not in seen:
+            row["pin"] = GPIO_TO_PIN.get(want[role])
+            seen.add(role)
+    for role, gpio in want.items():
+        if role not in seen:
+            rows.append({"group": _role_group(role), "pin": GPIO_TO_PIN.get(gpio), "role": role, "from": "",
+                         "wire": "", "to": "", "via": "", "note": "Thêm theo cấu hình phần mềm"})
+    return rows
+
+
+def validate_rows(rows: list) -> list:
+    """Vai trò phải nối đúng loại chân; mỗi vai trò tín hiệu chỉ một dòng."""
+    errors, owner = [], {}
+    for i, row in enumerate(rows, start=1):
+        role, pin = row.get("role") or "", row.get("pin")
+        if not role:
+            continue
+        name, needed = role_info(role)
+        if pin is None:
+            errors.append(f"Dòng {i}: {name} chưa chọn chân Pi")
+        elif pin_type(pin) != needed:
+            errors.append(f"Dòng {i}: {name} phải nối chân {PIN_TYPE_NAMES[needed]}, "
+                          f"chân {pin} là {PIN_TYPE_NAMES.get(pin_type(pin), 'chân không dùng được')}")
+        if needed == "GPIO":
+            if role in owner:
+                errors.append(f"Dòng {owner[role]} và dòng {i} cùng là {name}")
+            owner.setdefault(role, i)
+    return errors
+
+
 def sanitize_wiring(rows) -> list:
-    """Chỉ giữ các cột đã biết (chuỗi, cắt độ dài), bỏ dòng trống. Quá MAX_WIRING_ROWS ⇒ ValueError."""
+    """Chỉ giữ các cột đã biết (chuỗi, cắt độ dài), chân 1–40, vai trò hợp lệ; bỏ dòng trống.
+    Quá MAX_WIRING_ROWS ⇒ ValueError."""
     if not isinstance(rows, list):
         return []
     if len(rows) > MAX_WIRING_ROWS:
@@ -196,6 +293,10 @@ def sanitize_wiring(rows) -> list:
         if not isinstance(row, dict):
             continue
         clean = {f: str(row.get(f) or "").strip()[:MAX_WIRING_TEXT] for f in WIRING_FIELDS}
+        pin = row.get("pin")
+        clean["pin"] = pin if isinstance(pin, int) and not isinstance(pin, bool) and 1 <= pin <= 40 else None
+        role = str(row.get("role") or "").strip()
+        clean["role"] = role if ROLE_PATTERN.match(role) else ""
         if any(clean.values()):
             out.append(clean)
     return out
@@ -270,7 +371,13 @@ def store(cfg, settings, wiring: Optional[list] = None) -> dict:
     path = settings.HARDWARE_CONFIG_FILE
     if wiring is None:
         wiring = (load(path) or {}).get("wiring")
-    cfg = {**functional(cfg), **({"wiring": sanitize_wiring(wiring)} if wiring is not None else {})}
+    rows = None
+    if wiring is not None:
+        rows = sync_rows(cfg, sanitize_wiring(wiring))   # chân của dòng tín hiệu luôn theo bản đồ chân
+        row_errors = validate_rows(rows)
+        if row_errors:
+            return {"errors": row_errors, "warnings": [], "config": cfg}
+    cfg = {**functional(cfg), **({"wiring": rows} if rows is not None else {})}
     save(cfg, path)
     sync_lid_tuning(cfg, settings.LID_TUNING_FILE)
     warnings = []

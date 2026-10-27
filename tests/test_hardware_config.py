@@ -272,14 +272,46 @@ class ServicePanelConfigTest(unittest.TestCase):
 
     def test_wiring_only_change_saves_without_restart(self):
         running = self.panel.hw_config()["running"]
-        wiring = [{"group": "Relay", "from": "Pi chân 6", "wire": "XD1N3", "to": "Relay DC−", "hack": "x"}, {"from": ""}]
+        wiring = [{"group": "Relay", "pin": 6, "role": "relay:dc-", "wire": "XD1N3", "to": "Relay DC−", "hack": "x"},
+                  {"from": ""}]
         r = self.panel.save_hw_config(running, wiring)
         self.assertFalse(r["restarting"])
         self.assertEqual(self.restarts, [])
         stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
-        self.assertEqual(stored["wiring"], [{"group": "Relay", "from": "Pi chân 6", "wire": "XD1N3",
-                                             "to": "Relay DC−", "via": "", "note": ""}])
+        self.assertEqual(stored["wiring"][0], {"group": "Relay", "pin": 6, "role": "relay:dc-", "from": "",
+                                               "wire": "XD1N3", "to": "Relay DC−", "via": "", "note": ""})
+        # dòng tín hiệu còn thiếu được thêm theo bản đồ chân (7 relay + 7 cảm biến ở cấu hình mặc định)
+        roles = [row["role"] for row in stored["wiring"]]
+        self.assertIn("relay:1", roles)
+        self.assertIn("door:7", roles)
         self.assertFalse(self.panel.hw_config()["defaultWiring"])
+
+    def test_row_pins_follow_pin_map_and_power_roles_need_right_pin_type(self):
+        running = self.panel.hw_config()["running"]
+        # dòng relay ô 1 ghi sai chân ⇒ được kéo về đúng chân của bản đồ chân
+        rows = hardware_config.sync_rows(running, [{"pin": 40, "role": "relay:1"}])
+        self.assertEqual(rows[0]["pin"], hardware_config.GPIO_TO_PIN[running["relayPins"][0]])
+        # mát phải là chân GND, PUL+ phải là 3,3 V
+        bad = [{"pin": 2, "role": "door:gnd"}, {"pin": 4, "role": "lid1:pul+"}, {"pin": 6, "role": "relay:dc-"}]
+        with self.assertRaisesRegex(ValueError, "mát cảm biến cửa phải nối chân GND"):
+            self.panel.save_hw_config(running, bad)
+        errors = hardware_config.validate_rows(bad)
+        self.assertEqual(len(errors), 2)                           # dòng DC− trên chân 6 (GND) là đúng
+
+    def test_rows_of_disabled_lid_are_plans(self):
+        running = copy.deepcopy(self.panel.hw_config()["running"])
+        plan = [{"pin": 11, "role": "lid2:pul"}, {"pin": 3, "role": "lid2:dir"}]
+        for lid in running["lids"]:
+            lid["enabled"] = lid["axis"] == 1 and lid["enabled"]
+        rows = hardware_config.sync_rows(running, plan)
+        self.assertEqual([r["pin"] for r in rows[:2]], [11, 3])   # trục 2 tắt: giữ phương án, không ghi đè
+
+    def test_dropped_box_loses_its_role(self):
+        running = copy.deepcopy(self.panel.hw_config()["running"])
+        running["relayPins"], running["doorPins"] = running["relayPins"][:6], running["doorPins"][:6]
+        rows = hardware_config.sync_rows(running, [{"pin": 16, "role": "relay:7", "note": "C4N3"}])
+        self.assertEqual(rows[0]["role"], "")
+        self.assertIn("ô đã bỏ", rows[0]["note"])
 
     def test_pin_change_saves_and_restarts(self):
         changed = copy.deepcopy(self.panel.hw_config()["running"])

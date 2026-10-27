@@ -269,11 +269,14 @@ class ServicePanel:
         """Cấu hình đang chạy + sơ đồ đấu dây đã lưu (chưa lưu thì bảng mẫu TU01)."""
         saved = hardware_config.load(self.settings.HARDWARE_CONFIG_FILE)
         wiring = (saved or {}).get("wiring")
-        default_rows = hardware_config.load_default_wiring()
+        running = hardware_config.effective(self.settings, self.lids)
+        # Dòng tín hiệu luôn hiện đúng chân đang chạy; thiếu dòng nào thì tự thêm.
+        default_rows = hardware_config.sync_rows(running, hardware_config.load_default_wiring())
+        rows = default_rows if wiring is None else hardware_config.sync_rows(running, hardware_config.sanitize_wiring(wiring))
         return {
-            "running": hardware_config.effective(self.settings, self.lids),
+            "running": running,
             "saved": saved is not None,
-            "wiring": wiring if wiring is not None else default_rows,
+            "wiring": rows,
             "defaultWiring": wiring is None,
             "defaultWiringRows": default_rows,
         }
