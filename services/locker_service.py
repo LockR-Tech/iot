@@ -1,10 +1,12 @@
 import json
 import os
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Callable, Optional
+from config import hardware_config
 from config.settings import settings
 from domain.enums import CommandAction, LockerHwState
 from services.setup_handler import SetupHandler
@@ -191,6 +193,9 @@ class LockerService:
             self._executor.submit(self._safe, self._handle_lid_tune_command, cab, data)
         elif action == "panel":
             self._executor.submit(self._safe, self._handle_panel_command, cab, data)
+        elif action == "hw-config":
+            # Như restart: chờ lệnh phần cứng đang chạy xong, và không chạy trên luồng mạng của paho.
+            self._executor.submit(self._safe, self._handle_hw_config_command, cab, data)
         else:
             logger.debug(f"Unhandled command: {topic}")
 
@@ -364,7 +369,86 @@ class LockerService:
             lids.append({"axis": axis, "enabled": lid is not None,
                          "boxes": self._lid_boxes()[axis],
                          "status": lid.status() if lid else None})
-        self._publish_cmd_result(cab, "panel", command_id, "SUCCESS", {"lids": lids})
+        self._publish_cmd_result(cab, "panel", command_id, "SUCCESS", {
+            "lids": lids, "hardware": hardware_config.effective(settings, self.lids)})
+
+    def _handle_hw_config_command(self, cab: dict, data: dict):
+        """Topic: cabinet/{lockerId}/command/hw-config — admin đổi bản đồ chân trên web.
+
+        Kiểm tra ⇒ lưu config/hardware_config.json (ghi đè `.env` từ lần khởi động sau) ⇒ đồng bộ
+        chiều/mức công tắc vào lid_tuning.json ⇒ đổi chân relay thì cập nhật dòng an toàn lúc khởi động
+        ⇒ báo ACCEPTED rồi thoát để systemd chạy lại với cấu hình mới. Sai ⇒ FAILED, không đổi gì.
+        """
+        command_id = data.get("commandId")
+        topic = f"cabinet/{cab['id']}/command/hw-config/result"
+        cfg = data.get("config")
+        if isinstance(cfg, dict) and isinstance(cfg.get("lids"), list):
+            cfg = hardware_config.normalize(cfg)
+        errors = hardware_config.validate(cfg)
+        if errors:
+            logger.error(f"HW-CONFIG {command_id} rejected: {errors}")
+            return self._publish_cmd_result(cab, "hw-config", command_id, "FAILED", {
+                "errorCode": "INVALID_CONFIG", "errorMessage": "; ".join(errors), "errors": errors})
+        try:
+            hardware_config.save(cfg, settings.HARDWARE_CONFIG_FILE)
+            self._sync_lid_tuning(cfg)
+        except OSError as e:
+            return self._publish_cmd_result(cab, "hw-config", command_id, "FAILED", {
+                "errorCode": "SAVE_FAILED", "errorMessage": f"Không lưu được cấu hình trên Pi: {e}"})
+
+        warnings = []
+        if list(cfg["relayPins"]) != list(settings.GPIO_RELAY_PINS):
+            warning = self._update_boot_relay_pins(cfg["relayPins"])
+            if warning:
+                warnings.append(warning)
+        logger.warning(f"🛠 HW-CONFIG {command_id} saved — restarting with relay {cfg['relayPins']}, "
+                       f"door {cfg['doorPins']}")
+        payload = {"commandId": command_id, "status": "ACCEPTED", "config": cfg, "warnings": warnings,
+                   "timestamp": datetime.now(timezone.utc).isoformat()}
+        if not self.mqtt.publish_and_wait(topic, json.dumps(payload), qos=1, timeout=RESTART_RESULT_TIMEOUT):
+            logger.error(f"HW-CONFIG {command_id}: broker chưa xác nhận kết quả — vẫn khởi động lại")
+        self._restart_process(command_id)
+
+    @staticmethod
+    def _sync_lid_tuning(cfg: dict):
+        """Chiều mở và mức công tắc trong lid_tuning.json ghi đè `.env` ⇒ đổi theo cấu hình mới."""
+        path = settings.LID_TUNING_FILE
+        try:
+            with open(path, encoding="utf-8") as f:
+                tuning = json.load(f)
+        except (FileNotFoundError, ValueError):
+            return
+        changed = False
+        for lid in cfg["lids"]:
+            saved = tuning.get(str(lid["axis"]))
+            if isinstance(saved, dict):
+                saved["open_dir_high"] = lid["openDirHigh"]
+                saved["limit_active_low"] = lid["limitActiveLow"]
+                changed = True
+        if changed:
+            tmp = f"{path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(tuning, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+
+    @staticmethod
+    def _update_boot_relay_pins(pins: list) -> Optional[str]:
+        """Chạy scripts/boot_relay_pins.py bằng sudo. Trả cảnh báo (chuỗi) nếu không làm được."""
+        if settings.HARDWARE_BACKEND != "gpio":
+            return None
+        csv = ",".join(str(int(p)) for p in pins)
+        try:
+            done = subprocess.run(["sudo", "-n", "python3", settings.BOOT_RELAY_SCRIPT, csv],
+                                  capture_output=True, text=True, timeout=20)
+            report = json.loads(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else {}
+            if done.returncode == 0 and report.get("ok"):
+                return None
+            reason = report.get("error") or done.stderr.strip() or f"mã {done.returncode}"
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            reason = str(e)
+        logger.error(f"Boot relay pins not updated: {reason}")
+        return (f"Chưa cập nhật được dòng giữ relay ở mức thấp lúc khởi động ({reason}). "
+                f"Chạy tay trên Pi: sudo python3 scripts/boot_relay_pins.py {csv}")
 
     def _lid_for(self, data: dict, slot_index: Optional[int]):
         """Nắp trượt chỉ dùng khi lệnh ghi rõ `lid: true` — luồng drone thả hàng qua nóc tủ.
@@ -664,6 +748,10 @@ class LockerService:
         if not self.mqtt.publish_and_wait(topic, accepted, qos=1, timeout=RESTART_RESULT_TIMEOUT):
             logger.error(f"RESTART {command_id}: broker chưa xác nhận kết quả — vẫn khởi động lại")
 
+        self._restart_process(command_id)
+
+    def _restart_process(self, command_id):
+        """Thoát với RESTART_EXIT_CODE để systemd chạy lại lockr-controller (lệnh restart, hw-config)."""
         if self._restart_requested:
             # QoS 1 có thể giao lại lệnh, hoặc KTV bấm lại khi tiến trình đang dừng: trả lời nhưng không thoát lần nữa
             logger.info(f"RESTART {command_id}: đang khởi động lại rồi, bỏ qua lệnh trùng")
