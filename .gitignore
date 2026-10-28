@@ -20,3 +20,6 @@ config/hardware_config.json*
 config/control_log_outbox.jsonl*
 # Khoá công khai kiểm mã mở ô qua Bluetooth, tải từ backend
 config/ble_public_key.json*
+# Kết quả lần chuyển Wi-Fi gần nhất trên bảng /service (và bản giả lập)
+config/wifi_switch_result.json
+*.sim.json

@@ -1,0 +1,36 @@
+[
+  {"group": "Relay", "pin": 6, "role": "relay:dc-", "from": "", "wire": "XD1N3", "to": "Relay DC−", "via": "", "note": ""},
+  {"group": "Relay", "pin": 2, "role": "relay:dc+", "from": "", "wire": "Đ1N3", "to": "Relay DC+", "via": "", "note": "Nuôi cuộn relay"},
+  {"group": "Relay", "pin": 29, "role": "relay:1", "from": "", "wire": "C3N3", "to": "Relay IN1", "via": "", "note": ""},
+  {"group": "Relay", "pin": 31, "role": "relay:2", "from": "", "wire": "XĐ1N3", "to": "Relay IN2", "via": "", "note": ""},
+  {"group": "Relay", "pin": 33, "role": "relay:3", "from": "", "wire": "C5N3", "to": "Relay IN3", "via": "", "note": ""},
+  {"group": "Relay", "pin": 35, "role": "relay:4", "from": "", "wire": "C6N3", "to": "Relay IN4", "via": "", "note": ""},
+  {"group": "Relay", "pin": 37, "role": "relay:5", "from": "", "wire": "C1N3", "to": "Relay IN5", "via": "", "note": ""},
+  {"group": "Relay", "pin": 15, "role": "relay:6", "from": "", "wire": "C2N3", "to": "Relay IN6", "via": "", "note": ""},
+  {"group": "Relay", "pin": 16, "role": "relay:7", "from": "", "wire": "C4N3", "to": "Relay IN7", "via": "", "note": ""},
+  {"group": "Relay", "pin": null, "role": "", "from": "Relay K1–K7 (đầu ra)", "wire": "xanh mảnh", "to": "Dây âm khoá ô 1–7 và −V", "via": "", "note": "Nhà làm tủ nối sẵn. Jumper kênh 1–7 ở H"},
+
+  {"group": "Domino 1", "pin": 25, "role": "door:gnd", "from": "", "wire": "V2", "to": "Domino 1 cọc 1", "via": "Cầu nối cọc lẻ 1-3-5-7-9-11", "note": "Mát chung cảm biến cửa ô 1–6"},
+  {"group": "Domino 1", "pin": 7, "role": "door:1", "from": "", "wire": "V3", "to": "Domino 1 cọc 2", "via": "", "note": ""},
+  {"group": "Domino 1", "pin": 32, "role": "door:2", "from": "", "wire": "V1", "to": "Domino 1 cọc 4", "via": "", "note": ""},
+  {"group": "Domino 1", "pin": 36, "role": "door:3", "from": "", "wire": "V6", "to": "Domino 1 cọc 6", "via": "", "note": ""},
+  {"group": "Domino 1", "pin": 38, "role": "door:4", "from": "", "wire": "V5", "to": "Domino 1 cọc 8", "via": "", "note": ""},
+  {"group": "Domino 1", "pin": 40, "role": "door:5", "from": "", "wire": "V4", "to": "Domino 1 cọc 10", "via": "", "note": ""},
+  {"group": "Domino 1", "pin": 18, "role": "door:6", "from": "", "wire": "C1N1", "to": "Domino 1 cọc 12", "via": "", "note": ""},
+
+  {"group": "Domino 2", "pin": 1, "role": "lid1:pul+", "from": "", "wire": "XL6", "to": "Domino 2 cọc 4", "via": "", "note": "Cọc 4 cũng cấp 3,3 V cho PUL+/DIR+ driver 2"},
+  {"group": "Domino 2", "pin": 17, "role": "lid1:dir+", "from": "", "wire": "ĐN", "to": "Domino 2 cọc 6", "via": "", "note": ""},
+  {"group": "Domino 2", "pin": 12, "role": "lid1:pul", "from": "", "wire": "XL1", "to": "Domino 2 cọc 5", "via": "", "note": ""},
+  {"group": "Domino 2", "pin": 13, "role": "lid1:dir", "from": "", "wire": "XL4", "to": "Domino 2 cọc 7", "via": "", "note": ""},
+  {"group": "Domino 2", "pin": 22, "role": "door:7", "from": "", "wire": "XL2", "to": "Domino 2 cọc 11", "via": "", "note": ""},
+  {"group": "Domino 2", "pin": 30, "role": "door:gnd", "from": "", "wire": "XL3", "to": "Domino 2 cọc 12", "via": "", "note": "Mát cảm biến cửa ô 7"},
+  {"group": "Domino 2", "pin": null, "role": "", "from": "Nguồn tổ ong +V", "wire": "nâu", "to": "Domino 2 cọc 1–2 (+12 V)", "via": "", "note": "+12 V cho khoá và driver 1"},
+  {"group": "Domino 2", "pin": null, "role": "", "from": "Nguồn tổ ong −V", "wire": "xanh", "to": "Domino 2 cọc 3 (−V)", "via": "", "note": ""},
+
+  {"group": "Driver 2 (dự kiến)", "pin": 11, "role": "lid2:pul", "from": "", "wire": "", "to": "Driver 2 PUL−", "via": "", "note": ""},
+  {"group": "Driver 2 (dự kiến)", "pin": 3, "role": "lid2:dir", "from": "", "wire": "", "to": "Driver 2 DIR−", "via": "", "note": ""},
+  {"group": "Driver 2 (dự kiến)", "pin": 1, "role": "lid2:pul+", "from": "", "wire": "", "to": "Driver 2 PUL+", "via": "Domino 2 cọc 4", "note": "Chung 3,3 V với PUL+ driver 1"},
+  {"group": "Driver 2 (dự kiến)", "pin": 1, "role": "lid2:dir+", "from": "", "wire": "", "to": "Driver 2 DIR+", "via": "Domino 2 cọc 4", "note": "Bắc cầu với PUL+ trên driver 2"},
+  {"group": "Driver 2 (dự kiến)", "pin": null, "role": "", "from": "Nguồn tổ ong +V / −V", "wire": "", "to": "Driver 2 VCC / GND", "via": "", "note": ""},
+  {"group": "Driver 2 (dự kiến)", "pin": null, "role": "", "from": "Động cơ trục 2", "wire": "xanh lá / đen / xanh dương / đỏ", "to": "Driver 2 A+ / A− / B+ / B−", "via": "", "note": ""}
+]

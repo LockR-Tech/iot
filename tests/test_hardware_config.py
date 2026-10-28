@@ -19,6 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config import hardware_config
 from config.settings import settings
 from infracstructure.cabinet_state import CabinetState
+from infracstructure.service_panel import ServicePanel
 from services.locker_service import RESTART_EXIT_CODE, LockerService
 from tests.test_mqtt_contract import FakeMqtt
 
@@ -154,7 +155,7 @@ class HwConfigCommandTest(unittest.TestCase):
     def result(self, action="hw-config"):
         return self.mqtt.on(f"cabinet/7/command/{action}/result")[-1]
 
-    @mock.patch("services.locker_service.subprocess.run")
+    @mock.patch("config.hardware_config.subprocess.run")
     def test_valid_config_is_saved_then_controller_restarts(self, run):
         self.send({"commandId": "h-1", "config": TU01})
         r = self.result()
@@ -167,7 +168,7 @@ class HwConfigCommandTest(unittest.TestCase):
         run.assert_not_called()                                         # chân relay không đổi
         self.assertIn("cabinet/7/command/hw-config/result", [t for t, *_ in self.mqtt.waited])
 
-    @mock.patch("services.locker_service.subprocess.run")
+    @mock.patch("config.hardware_config.subprocess.run")
     def test_changed_relay_pins_update_boot_line(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, stdout='{"ok": true}\n', stderr="")
         self.send({"commandId": "h-2", "config": rewired()})
@@ -176,7 +177,7 @@ class HwConfigCommandTest(unittest.TestCase):
         self.assertEqual(args[:3], ["sudo", "-n", "python3"])
         self.assertEqual(args[-1], "17,27,22,23,6,5,16")
 
-    @mock.patch("services.locker_service.subprocess.run")
+    @mock.patch("config.hardware_config.subprocess.run")
     def test_boot_line_failure_is_reported_as_warning(self, run):
         run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="sudo: a password is required")
         self.send({"commandId": "h-3", "config": cfg(relayPins=[5, 6, 13, 19, 26, 22, 9])})
@@ -239,6 +240,160 @@ class BootRelayScriptTest(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertIn("gpio=5,6,13", self.config_txt.read_text(encoding="utf-8"))
 
+
+class ServicePanelConfigTest(unittest.TestCase):
+    """Tab Cấu hình trên bảng /service: sửa bản đồ chân và sơ đồ đấu dây ngay trên Pi."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg_path = os.path.join(self.tmp.name, "hardware_config.json")
+        self.patches = [
+            mock.patch.object(settings, "HARDWARE_CONFIG_FILE", self.cfg_path),
+            mock.patch.object(settings, "LID_TUNING_FILE", os.path.join(self.tmp.name, "lid_tuning.json")),
+            mock.patch.object(settings, "HARDWARE_BACKEND", "rs485"),     # không gọi sudo trong test
+        ]
+        for p in self.patches:
+            p.start()
+        self.restarts = []
+        self.panel = ServicePanel(None, {}, None, settings, restart=lambda: self.restarts.append(1))
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_first_load_shows_running_config_and_tu01_wiring(self):
+        hw = self.panel.hw_config()
+        self.assertFalse(hw["saved"])
+        self.assertTrue(hw["defaultWiring"])
+        self.assertGreater(len(hw["wiring"]), 20)
+        self.assertIn("XD1N3", [r["wire"] for r in hw["wiring"]])
+        self.assertEqual(hw["running"]["relayPins"], list(settings.GPIO_RELAY_PINS))
+
+    def test_wiring_only_change_saves_without_restart(self):
+        running = self.panel.hw_config()["running"]
+        wiring = [{"group": "Relay", "pin": 6, "role": "relay:dc-", "wire": "XD1N3", "to": "Relay DC−", "hack": "x"},
+                  {"from": ""}]
+        r = self.panel.save_hw_config(running, wiring)
+        self.assertFalse(r["restarting"])
+        self.assertEqual(self.restarts, [])
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["wiring"][0], {"group": "Relay", "pin": 6, "role": "relay:dc-", "from": "",
+                                               "wire": "XD1N3", "to": "Relay DC−", "via": "", "note": ""})
+        # dòng tín hiệu còn thiếu được thêm theo bản đồ chân (7 relay + 7 cảm biến ở cấu hình mặc định)
+        roles = [row["role"] for row in stored["wiring"]]
+        self.assertIn("relay:1", roles)
+        self.assertIn("door:7", roles)
+        self.assertFalse(self.panel.hw_config()["defaultWiring"])
+
+    def test_row_pins_follow_pin_map_and_power_roles_need_right_pin_type(self):
+        running = self.panel.hw_config()["running"]
+        # dòng relay ô 1 ghi sai chân ⇒ được kéo về đúng chân của bản đồ chân
+        rows = hardware_config.sync_rows(running, [{"pin": 40, "role": "relay:1"}])
+        self.assertEqual(rows[0]["pin"], hardware_config.GPIO_TO_PIN[running["relayPins"][0]])
+        # mát phải là chân GND, PUL+ phải là 3,3 V
+        bad = [{"pin": 2, "role": "door:gnd"}, {"pin": 4, "role": "lid1:pul+"}, {"pin": 6, "role": "relay:dc-"}]
+        with self.assertRaisesRegex(ValueError, "mát cảm biến cửa phải nối chân GND"):
+            self.panel.save_hw_config(running, bad)
+        errors = hardware_config.validate_rows(bad)
+        self.assertEqual(len(errors), 2)                           # dòng DC− trên chân 6 (GND) là đúng
+
+    def test_rows_of_disabled_lid_are_plans(self):
+        running = copy.deepcopy(self.panel.hw_config()["running"])
+        plan = [{"pin": 11, "role": "lid2:pul"}, {"pin": 3, "role": "lid2:dir"}]
+        for lid in running["lids"]:
+            lid["enabled"] = lid["axis"] == 1 and lid["enabled"]
+        rows = hardware_config.sync_rows(running, plan)
+        self.assertEqual([r["pin"] for r in rows[:2]], [11, 3])   # trục 2 tắt: giữ phương án, không ghi đè
+
+    def test_dropped_box_loses_its_role(self):
+        running = copy.deepcopy(self.panel.hw_config()["running"])
+        running["relayPins"], running["doorPins"] = running["relayPins"][:6], running["doorPins"][:6]
+        rows = hardware_config.sync_rows(running, [{"pin": 16, "role": "relay:7", "note": "C4N3"}])
+        self.assertEqual(rows[0]["role"], "")
+        self.assertIn("ô đã bỏ", rows[0]["note"])
+
+    def test_pin_change_saves_and_restarts(self):
+        changed = copy.deepcopy(self.panel.hw_config()["running"])
+        changed["unlockMs"] = changed["unlockMs"] + 500
+        r = self.panel.save_hw_config(changed, [])
+        self.assertTrue(r["restarting"])
+        self.assertEqual(self.restarts, [1])
+
+    def test_invalid_config_is_rejected(self):
+        bad = copy.deepcopy(self.panel.hw_config()["running"])
+        bad["doorPins"][0] = bad["relayPins"][0]
+        with self.assertRaises(ValueError):
+            self.panel.save_hw_config(bad, [])
+        self.assertFalse(os.path.exists(self.cfg_path))
+
+    def test_admin_apply_keeps_wiring_written_on_pi(self):
+        running = self.panel.hw_config()["running"]
+        self.panel.save_hw_config(running, [{"from": "Pi chân 1", "wire": "XL6", "to": "Domino 2 cọc 4"}])
+        outcome = hardware_config.store(running, settings)                  # như lệnh hw-config (không có wiring)
+        self.assertEqual(outcome["errors"], [])
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["wiring"][0]["wire"], "XL6")
+        self.assertNotIn("wiring", hardware_config.functional(stored))
+
+    def test_wiring_is_capped(self):
+        with self.assertRaises(ValueError):
+            hardware_config.sanitize_wiring([{"from": "x"}] * (hardware_config.MAX_WIRING_ROWS + 1))
+
+
+class SystemSettingsTest(unittest.TestCase):
+    """Mục Kết nối / Nâng cao của tab Cấu hình: chỉ sửa trên Pi, mật khẩu không bao giờ trả ra."""
+
+    setUp = ServicePanelConfigTest.setUp
+    tearDown = ServicePanelConfigTest.tearDown
+
+    def _system(self, **changes):
+        system = {k: v for k, v in self.panel.hw_config()["system"].items() if k != "mqttPasswordSet"}
+        system.update(changes)
+        return system
+
+    def test_unchanged_system_does_not_restart(self):
+        hw = self.panel.hw_config()
+        self.assertNotIn("mqttPassword", hw["system"])
+        r = self.panel.save_hw_config(hw["running"], [], self._system())
+        self.assertFalse(r["restarting"])
+
+    def test_changed_broker_saves_and_restarts(self):
+        running = self.panel.hw_config()["running"]
+        r = self.panel.save_hw_config(running, [], self._system(mqttBroker="mqtt.example.org", lockerId="7"))
+        self.assertTrue(r["restarting"])
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["system"]["mqttBroker"], "mqtt.example.org")
+        self.assertNotIn("system", hardware_config.functional(stored))
+        # lệnh hw-config từ admin (không có system) giữ nguyên phần này
+        hardware_config.store(running, settings)
+        self.assertEqual(json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))["system"]["lockerId"], "7")
+
+    def test_blank_password_keeps_saved_one(self):
+        running = self.panel.hw_config()["running"]
+        self.panel.save_hw_config(running, [], self._system(mqttUseTls=True, mqttPassword="s3cret"))
+        self.panel.save_hw_config(running, [], self._system(mqttUseTls=True, mqttPassword=""))
+        stored = json.loads(Path(self.cfg_path).read_text(encoding="utf-8"))
+        self.assertEqual(stored["system"]["mqttPassword"], "s3cret")
+
+    def test_bad_values_are_rejected(self):
+        running = self.panel.hw_config()["running"]
+        for bad in ({"lockerId": "CAB-TU01"}, {"mqttPort": 70000}, {"mqttBroker": "http://x"},
+                    {"mqttUseTls": False, "mqttPassword": "p"}, {"backendApiUrl": "ftp://x"},
+                    {"hardwareBackend": "usb"}):
+            with self.assertRaises(ValueError, msg=bad):
+                self.panel.save_hw_config(running, [], self._system(**bad))
+        self.assertFalse(os.path.exists(self.cfg_path))
+        self.assertTrue(hardware_config.validate_system({"unknown": 1}))    # file sửa tay có khoá lạ ⇒ bỏ cả phần
+
+    def test_overlay_applies_system_to_env(self):
+        hardware_config.save({**TU01, "system": {"lockerId": "7", "mqttUseTls": True, "doorSettleMs": 500}},
+                             self.cfg_path)
+        with mock.patch.dict(os.environ, {"LOCKER_ID": "1"}):
+            hardware_config.apply_overlay(self.cfg_path)
+            self.assertEqual(os.environ["LOCKER_ID"], "7")
+            self.assertEqual(os.environ["MQTT_USE_TLS"], "true")
+            self.assertEqual(os.environ["DOOR_SETTLE_MS"], "500")
 
 if __name__ == "__main__":
     unittest.main()

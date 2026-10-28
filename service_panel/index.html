@@ -129,6 +129,29 @@ td.mono { white-space: nowrap; }
 .k-lid1 { background: var(--k-lid1) !important; } .k-lid2 { background: var(--k-lid2) !important; }
 .k-3v3 { background: var(--k-3v3) !important; } .k-5v { background: var(--k-5v) !important; } .k-gnd { background: var(--k-gnd) !important; }
 @media (prefers-reduced-motion: reduce) { .meter > div { transition: none; } }
+
+/* Cấu hình (sửa trên Pi) */
+.cfg input[type=text] { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 100%; min-width: 0; }
+.cfg select.bad { border-color: var(--danger); color: var(--danger); }
+.cfg .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 10px; }
+.cfg .lidcard { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cfg .lidcard.off { border-style: dashed; }
+.cfg td.acts { white-space: nowrap; width: 1%; }
+.cfg td.acts button { padding: 3px 8px; }
+.cfg .run { display: block; font-size: 11.5px; color: var(--warn); }
+.cfg .savebar { position: sticky; bottom: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cfg .issues { color: var(--danger); margin: 0; padding-left: 18px; font-size: 13.5px; }
+.cfg .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--raise); border: 1px solid var(--line); }
+.cfg .badge.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.cfg .badge.ok { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+.cfg .chk { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.cfg td select { min-width: 150px; }
+.cfg td input[type=text] { min-width: 90px; }
+.cfg input[type=password] { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 100%; min-width: 0; }
+.cfg input.bad { border-color: var(--danger); }
+.cfg .nets { display: flex; flex-wrap: wrap; gap: 6px; }
+.cfg .nets button { font-size: 13px; padding: 3px 9px; }
+.stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -144,6 +167,7 @@ td.mono { white-space: nowrap; }
     <button role="tab" type="button" data-tab="boxes">Ô tủ</button>
     <button role="tab" type="button" data-tab="axes">Trục quay</button>
     <button role="tab" type="button" data-tab="pins">Sơ đồ chân</button>
+    <button role="tab" type="button" data-tab="config">Cấu hình</button>
     <button role="tab" type="button" data-tab="log">Nhật ký</button>
   </nav>
 </header>
@@ -198,6 +222,13 @@ td.mono { white-space: nowrap; }
     </table></div>
   </section>
 
+  <!-- Cấu hình: bản đồ chân + sơ đồ đấu dây, sửa và lưu ngay trên Pi -->
+  <div data-pane="config" class="stack">
+    <section class="panel cfg" id="cfg"><p class="muted">Đang tải cấu hình…</p></section>
+    <!-- Wi-Fi: thao tác ngay (không qua nút Lưu ở trên) -->
+    <section class="panel cfg" id="wifi"></section>
+  </div>
+
   <!-- Nhật ký -->
   <section data-pane="log" class="panel log">
     <h2>Thao tác gần đây</h2>
@@ -240,9 +271,10 @@ function showTab(name) {
   document.querySelectorAll('nav.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === name));
   document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== name);
   store.set('panel-tab', name);
+  if (name === 'config') setTimeout(() => { loadHardware(); loadWifi(); }, 0);   // sau khi script chạy xong (biến hw, wf đã khai báo)
 }
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-const TABS = ['boxes', 'axes', 'pins', 'log'];
+const TABS = ['boxes', 'axes', 'pins', 'config', 'log'];
 showTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : store.get('panel-tab', 'boxes'));
 
 /* ─── thanh trên ─── */
@@ -544,6 +576,513 @@ async function loadLayout() {
   catch (e) { layout = null; }
   if (data) renderBoxes();
 }
+/* ─── cấu hình phần cứng: sửa và lưu ngay trên Pi (GET/PUT /service/api/hardware) ─── */
+// Header 40 chân: chân vật lý → GPIO (BCM); chân nguồn/mát. Chân 27, 28 là EEPROM của HAT.
+const PIN_TO_GPIO = { 3: 2, 5: 3, 7: 4, 29: 5, 31: 6, 26: 7, 24: 8, 21: 9, 19: 10, 23: 11, 32: 12, 33: 13, 8: 14,
+  10: 15, 36: 16, 11: 17, 12: 18, 35: 19, 38: 20, 40: 21, 15: 22, 16: 23, 18: 24, 22: 25, 37: 26, 13: 27 };
+const GPIO_PIN = Object.fromEntries(Object.entries(PIN_TO_GPIO).map(([p, g]) => [g, +p]));
+const POWER_TYPE = { 1: '3V3', 17: '3V3', 2: '5V', 4: '5V', 6: 'GND', 9: 'GND', 14: 'GND', 20: 'GND', 25: 'GND', 30: 'GND', 34: 'GND', 39: 'GND' };
+const TYPE_NAME = { GPIO: 'GPIO', '3V3': '3,3 V', '5V': '5 V', GND: 'GND' };
+const pinType = p => p in PIN_TO_GPIO ? 'GPIO' : POWER_TYPE[p];
+const pinLabel = p => `chân ${p} · ${p in PIN_TO_GPIO ? 'GPIO' + PIN_TO_GPIO[p] : TYPE_NAME[POWER_TYPE[p]] || 'không dùng'}`;
+const GPIOS = Object.keys(GPIO_PIN).map(Number).sort((a, b) => a - b);
+const gpioLabel = g => `GPIO${g} · chân ${GPIO_PIN[g] ?? '?'}`;
+const LID_PINS = [['pulPin', 'PUL− (xung)'], ['dirPin', 'DIR− (chiều)'], ['homePin', 'Công tắc gốc (đóng hết)'], ['endPin', 'Công tắc cuối (mở hết)']];
+const LID_ROLE = { pul: 'pulPin', dir: 'dirPin', home: 'homePin', end: 'endPin' };
+const LID_ROLE_NAME = { pul: 'PUL−', dir: 'DIR−', home: 'công tắc gốc', end: 'công tắc cuối', 'pul+': 'PUL+', 'dir+': 'DIR+' };
+const WIRE_TEXT = [['wire', 'Tên dây'], ['to', 'Tới'], ['via', 'Qua'], ['note', 'Ghi chú']];
+const clone = v => JSON.parse(JSON.stringify(v));
+let hw = null;   // { cfg, wiring, running, saved, defaultWiring, defaultWiringRows, dirty, busy }
+
+// Vai trò của một dòng đấu nối: [tên, loại chân cần]. Rỗng = ghi chú tự do (dây không vào Pi).
+function roleInfo(role) {
+  if (!role) return ['khác', null];
+  const [kind, arg] = role.split(':');
+  if (kind === 'relay') return arg === 'dc+' ? ['nguồn relay DC+', '5V'] : arg === 'dc-' ? ['mát relay DC−', 'GND'] : [`relay ô ${arg}`, 'GPIO'];
+  if (kind === 'door') return arg === 'gnd' ? ['mát cảm biến cửa', 'GND'] : [`cảm biến cửa ô ${arg}`, 'GPIO'];
+  if (kind === 'switch') return arg === 'vcc' ? ['nguồn công tắc hành trình', '3V3'] : ['mát công tắc hành trình', 'GND'];
+  return [`${LID_ROLE_NAME[arg]} trục ${kind.slice(3)}`, arg.endsWith('+') ? '3V3' : 'GPIO'];
+}
+function roleOptions(n) {
+  const out = ['', 'relay:dc+', 'relay:dc-'];
+  for (let i = 1; i <= n; i++) out.push('relay:' + i);
+  for (let i = 1; i <= n; i++) out.push('door:' + i);
+  out.push('door:gnd');
+  [1, 2].forEach(a => ['pul', 'dir', 'pul+', 'dir+', 'home', 'end'].forEach(k => out.push(`lid${a}:${k}`)));
+  return [...out, 'switch:vcc', 'switch:gnd'];
+}
+// {vai trò: GPIO} bản đồ chân đang dùng; trục chưa bật không tính (dòng của nó là phương án dự kiến).
+function signalRoles(cfg) {
+  const out = {};
+  cfg.relayPins.forEach((g, i) => out['relay:' + (i + 1)] = g);
+  cfg.doorPins.forEach((g, i) => out['door:' + (i + 1)] = g);
+  cfg.lids.filter(l => l.enabled).forEach(l => Object.entries(LID_ROLE).forEach(([s, k]) => out[`lid${l.axis}:${s}`] = l[k]));
+  return out;
+}
+const isLiveSignal = (cfg, role) => role in signalRoles(cfg);
+function roleGroup(role) {
+  const kind = role.split(':')[0];
+  return kind === 'relay' ? 'Relay' : kind === 'door' ? 'Cảm biến cửa' : `Nắp trục ${kind.slice(3)}`;
+}
+// Bảng đấu nối khớp bản đồ chân: dòng tín hiệu nhận đúng chân, thiếu thì thêm (như sync_rows trên Pi).
+function syncRows() {
+  const want = signalRoles(hw.cfg), seen = new Set(), n = hw.cfg.relayPins.length;
+  hw.wiring.forEach(r => {
+    const m = /^(relay|door):(\d+)$/.exec(r.role || '');
+    if (m && +m[2] > n) { r.role = ''; r.note = `${r.note || ''} (ô đã bỏ)`.trim(); }
+    else if (r.role in want && !seen.has(r.role)) { r.pin = GPIO_PIN[want[r.role]] ?? null; seen.add(r.role); }
+  });
+  Object.entries(want).forEach(([role, g]) => {
+    if (!seen.has(role)) hw.wiring.push({ group: roleGroup(role), pin: GPIO_PIN[g] ?? null, role, from: '', wire: '', to: '', via: '', note: 'Thêm theo cấu hình phần mềm' });
+  });
+}
+// Dòng tín hiệu đổi chân ⇒ bản đồ chân đổi theo.
+function rowToCfg(row) {
+  if (!row.role || !isLiveSignal(hw.cfg, row.role) || pinType(row.pin) !== 'GPIO') return;
+  const g = PIN_TO_GPIO[row.pin], [kind, arg] = row.role.split(':');
+  if (kind === 'relay') hw.cfg.relayPins[+arg - 1] = g;
+  else if (kind === 'door') hw.cfg.doorPins[+arg - 1] = g;
+  else hw.cfg.lids.find(l => l.axis === +kind.slice(3))[LID_ROLE[arg]] = g;
+}
+function hwUsage(cfg) {
+  const use = new Map(), add = (p, r) => use.set(p, [...(use.get(p) || []), r]);
+  cfg.relayPins.forEach((p, i) => add(p, `relay ô ${i + 1}`));
+  cfg.doorPins.forEach((p, i) => add(p, `cảm biến ô ${i + 1}`));
+  cfg.lids.filter(l => l.enabled).forEach(l => LID_PINS.forEach(([k, n]) => add(l[k], `${n} trục ${l.axis}`)));
+  return use;
+}
+function rowIssues(rows) {
+  const out = [], owner = {};
+  rows.forEach((r, i) => {
+    if (!r.role) return;
+    const [name, need] = roleInfo(r.role);
+    if (r.pin == null) out.push(`Dòng ${i + 1}: ${name} chưa chọn chân Pi`);
+    else if (pinType(r.pin) !== need) out.push(`Dòng ${i + 1}: ${name} phải nối chân ${TYPE_NAME[need]}, chân ${r.pin} là ${TYPE_NAME[pinType(r.pin)] || 'chân không dùng được'}`);
+    if (need === 'GPIO') { if (r.role in owner) out.push(`Dòng ${owner[r.role]} và dòng ${i + 1} cùng là ${name}`); else owner[r.role] = i + 1; }
+  });
+  return out;
+}
+function hwIssues() {
+  const cfg = hw.cfg, out = [];
+  hwUsage(cfg).forEach((roles, p) => { if (roles.length > 1) out.push(`GPIO${p} bị dùng hai lần: ${roles.join(' và ')}`); });
+  if (!(cfg.unlockMs >= 100 && cfg.unlockMs <= 10000)) out.push('Thời gian kích relay phải từ 100 tới 10000 ms');
+  const owner = new Map();
+  cfg.lids.forEach(l => l.boxes.forEach(b => {
+    if (owner.has(b)) out.push(`Ô ${b} không thể nằm dưới cả trục ${owner.get(b)} và trục ${l.axis}`);
+    owner.set(b, l.axis);
+  }));
+  return [...out, ...rowIssues(hw.wiring), ...sysIssues(hw.sys)];
+}
+// Cảnh báo (không chặn lưu): phương án của trục chưa bật đụng chân đang dùng.
+function hwWarnings() {
+  const use = hwUsage(hw.cfg), out = [];
+  hw.wiring.forEach(r => {
+    const m = /^lid(\d):(pul|dir|home|end)$/.exec(r.role || '');
+    if (!m || isLiveSignal(hw.cfg, r.role) || pinType(r.pin) !== 'GPIO') return;
+    const busy = use.get(PIN_TO_GPIO[r.pin]);
+    if (busy) out.push(`Chân ${r.pin} (GPIO${PIN_TO_GPIO[r.pin]}) đang là ${busy.join(', ')}; ${roleInfo(r.role)[0]} (trục chưa bật) dự kiến cũng dùng chân này — đổi một bên trước khi bật trục ${m[1]}.`);
+  });
+  const cab = data && data.system && data.system.cabinet, id = hw.sys.lockerId;
+  if (id === '1') out.push('Mã tủ 1 thường không phải tủ này — kiểm tra đúng id tủ trên admin trước khi lưu.');
+  else if (cab && id && id !== String(cab.id)) out.push(`Mã tủ ${id} khác tủ Pi đang phục vụ (id ${cab.id}) — lưu xong Pi sẽ nhận lệnh của tủ ${id}.`);
+  if (hw.sys.hardwareBackend !== hw.sysRun.hardwareBackend) out.push('Đổi cách điều khiển khoá: kiểm tra dây trước khi lưu, bản đồ chân relay chỉ dùng với GPIO.');
+  return out;
+}
+async function loadHardware(force) {
+  if (hw && (hw.dirty || hw.busy) && !force) return;
+  try {
+    const r = await api('/hardware');
+    hw = { cfg: clone(r.running), wiring: r.wiring, defaultWiringRows: r.defaultWiringRows, running: r.running,
+           saved: r.saved, defaultWiring: r.defaultWiring, dirty: false, busy: false,
+           sys: sysEditable(r.system), sysRun: r.system };
+    renderConfig();
+  } catch (e) { $('#cfg').innerHTML = `<p class="note err">Không đọc được cấu hình: ${esc(e.message)}</p>`; }
+}
+function runHint(now, want, fmt) {
+  if (now === undefined || JSON.stringify(now) === JSON.stringify(want)) return '';
+  return `<span class="run">Đang chạy: ${esc(fmt ? fmt(now) : now)}</span>`;
+}
+function gpioSelect(attrs, value, bad) {
+  return `<select ${attrs}${bad ? ' class="bad"' : ''}>` +
+    GPIOS.map(g => `<option value="${g}"${g === value ? ' selected' : ''}>${gpioLabel(g)}</option>`).join('') + '</select>';
+}
+function pinSelect(i, value, bad) {
+  const opts = ['<option value="">— không vào Pi —</option>'];
+  for (let p = 1; p <= 40; p++) if (pinType(p)) opts.push(`<option value="${p}"${p === value ? ' selected' : ''}>${pinLabel(p)}</option>`);
+  return `<select data-w="${i}" data-f="pin"${bad ? ' class="bad"' : ''}>${opts.join('')}</select>`;
+}
+function roleSelect(i, value, n) {
+  return `<select data-w="${i}" data-f="role">` + roleOptions(n).map(r =>
+    `<option value="${r}"${r === value ? ' selected' : ''}>${esc(r ? roleInfo(r)[0] : 'khác (ghi chú)')}</option>`).join('') + '</select>';
+}
+function yesNo(attrs, value, yes, no) {
+  return `<select ${attrs}><option value="1"${value ? ' selected' : ''}>${yes}</option><option value="0"${value ? '' : ' selected'}>${no}</option></select>`;
+}
+function renderConfig() {
+  const c = hw.cfg, run = hw.running, use = hwUsage(c), n = c.relayPins.length;
+  const dup = p => (use.get(p) || []).length > 1;
+  const badRows = new Set(rowIssues(hw.wiring).map(x => +/^Dòng (\d+)/.exec(x)?.[1]));
+  const boxRows = c.relayPins.map((relay, i) => `<tr>
+      <td><b>Ô ${i + 1}</b></td><td class="mono">IN${i + 1} → K${i + 1}</td>
+      <td>${gpioSelect(`data-pin="relayPins" data-i="${i}"`, relay, dup(relay))}${runHint(run.relayPins[i], relay, gpioLabel)}</td>
+      <td>${gpioSelect(`data-pin="doorPins" data-i="${i}"`, c.doorPins[i], dup(c.doorPins[i]))}${runHint(run.doorPins[i], c.doorPins[i], gpioLabel)}</td>
+      <td class="acts"><button type="button" data-act="box-up" data-i="${i}" title="Đổi chỗ với ô trên" ${i ? '' : 'disabled'}>↑</button>
+        <button type="button" data-act="box-down" data-i="${i}" title="Đổi chỗ với ô dưới" ${i < n - 1 ? '' : 'disabled'}>↓</button>
+        <button type="button" data-act="box-del" data-i="${i}" title="Xoá ô này" ${n > 1 ? '' : 'disabled'}>✕</button></td></tr>`).join('');
+  const lidCards = c.lids.map(l => {
+    const r = run.lids.find(x => x.axis === l.axis) || {};
+    return `<div class="lidcard${l.enabled ? '' : ' off'}">
+      <div class="row" style="justify-content:space-between"><h3 style="margin:0">Nắp trục ${l.axis}</h3>
+        <label class="chk"><input type="checkbox" data-lid="${l.axis}" data-k="enabled"${l.enabled ? ' checked' : ''}> Đang nối</label></div>
+      ${runHint(r.enabled, l.enabled, v => v ? 'đang nối' : 'chưa nối')}
+      ${l.enabled ? '' : '<p class="small muted" style="margin:0">Trục chưa bật: tick "Đang nối" thì chân lấy từ các dòng dự kiến của trục này ở bảng đấu nối.</p>'}
+      <div class="grid2">
+        ${LID_PINS.map(([k, name]) => `<label class="f">${name}${gpioSelect(`data-lid="${l.axis}" data-k="${k}"`, l[k], l.enabled && dup(l[k]))}${runHint(r[k], l[k], gpioLabel)}</label>`).join('')}
+        <label class="f">Chiều mở${yesNo(`data-lid="${l.axis}" data-k="openDirHigh"`, l.openDirHigh, 'DIR mức cao = mở', 'DIR mức thấp = mở')}${runHint(r.openDirHigh, l.openDirHigh, v => v ? 'DIR mức cao = mở' : 'DIR mức thấp = mở')}</label>
+        <label class="f">Công tắc hành trình khi bị nhấn${yesNo(`data-lid="${l.axis}" data-k="limitActiveLow"`, l.limitActiveLow, 'báo mức thấp', 'báo mức cao (module 3 dây)')}${runHint(r.limitActiveLow, l.limitActiveLow, v => v ? 'báo mức thấp' : 'báo mức cao')}</label>
+      </div>
+      <div class="small muted">Nắp nằm trên ô (lệnh drone vào ô này sẽ trượt nắp trục ${l.axis})</div>
+      <div class="chips">${Array.from({ length: n }, (_, i) => i + 1).map(b =>
+        `<label class="chk" style="font-size:13px"><input type="checkbox" data-lid="${l.axis}" data-box="${b}"${l.boxes.includes(b) ? ' checked' : ''}> Ô ${b}</label>`).join('')}</div>
+      ${runHint([...(r.boxes || [])].sort(), [...l.boxes].sort(), v => v.length ? 'ô ' + v.join(', ') : 'không ô nào')}
+    </div>`;
+  }).join('');
+  const wireRows = hw.wiring.map((row, i) => {
+    const live = row.role && isLiveSignal(c, row.role);
+    return `<tr>
+      <td><input type="text" maxlength="300" data-w="${i}" data-f="group" value="${esc(row.group || '')}"></td>
+      <td>${pinSelect(i, row.pin, badRows.has(i + 1))}${live ? '<span class="small muted">theo bản đồ chân</span>' : ''}</td>
+      <td>${roleSelect(i, row.role || '', n)}</td>
+      <td>${row.pin == null ? `<input type="text" maxlength="300" data-w="${i}" data-f="from" value="${esc(row.from || '')}" placeholder="nguồn, động cơ…">` : '<span class="small muted">—</span>'}</td>
+      ${WIRE_TEXT.map(([f]) => `<td><input type="text" maxlength="300" data-w="${i}" data-f="${f}" value="${esc(row[f] || '')}"></td>`).join('')}
+      <td class="acts"><button type="button" data-act="w-up" data-i="${i}" ${i ? '' : 'disabled'}>↑</button>
+        <button type="button" data-act="w-down" data-i="${i}" ${i < hw.wiring.length - 1 ? '' : 'disabled'}>↓</button>
+        <button type="button" data-act="w-del" data-i="${i}" title="Xoá dòng" ${live ? 'disabled' : ''}>✕</button></td></tr>`;
+  }).join('');
+
+  $('#cfg').innerHTML = `
+    <div class="row" style="justify-content:space-between"><h2>Cấu hình phần cứng</h2><span id="cfgStatus" class="row"></span></div>
+    <p class="small muted">Sửa rồi bấm <b>Lưu</b>. Đổi chân hoặc tuỳ chọn ⇒ Pi lưu vào <code>config/hardware_config.json</code> (đè <code>.env</code>) và tự khởi động lại bộ điều khiển khoảng 10 giây. Chỉ sửa tên dây, nơi nối, ghi chú hay dây nguồn/mát thì lưu ngay, không khởi động lại. Chỗ nào khác cấu hình đang chạy có dòng "Đang chạy".</p>
+    <ul class="issues" id="cfgIssues"></ul>
+    <ul class="issues" id="cfgWarnings" style="color:var(--warn)"></ul>
+    <h2>Ô tủ: relay và cảm biến cửa</h2>
+    <div class="tablewrap"><table><thead><tr><th>Ô</th><th>Cọc relay</th><th>Chân điều khiển relay</th><th>Chân cảm biến cửa</th><th></th></tr></thead>
+      <tbody>${boxRows}</tbody></table></div>
+    <div class="row"><button type="button" data-act="box-add">+ Thêm ô</button></div>
+    <h2>Relay, cảm biến, drone</h2>
+    <div class="grid2">
+      <label class="f">Relay kích ở mức${yesNo('data-opt="relayActiveHigh"', c.relayActiveHigh, 'mức cao (jumper H)', 'mức thấp (jumper L)')}${runHint(run.relayActiveHigh, c.relayActiveHigh, v => v ? 'mức cao' : 'mức thấp')}</label>
+      <label class="f">Thời gian kích relay mở khoá (ms, 100–10000)<input type="number" min="100" max="10000" step="100" data-opt="unlockMs" value="${c.unlockMs}">${runHint(run.unlockMs, c.unlockMs, v => v + ' ms')}</label>
+      <label class="f">Cảm biến cửa báo đóng ở mức${yesNo('data-opt="doorClosedLow"', c.doorClosedLow, 'mức thấp = cửa đóng', 'mức cao = cửa đóng')}${runHint(run.doorClosedLow, c.doorClosedLow, v => v ? 'mức thấp = đóng' : 'mức cao = đóng')}</label>
+      <div>
+        <label class="chk"><input type="checkbox" data-opt="requireDoorSensor"${c.requireDoorSensor ? ' checked' : ''}> Chỉ báo mở ô thành công khi cảm biến thấy cửa mở</label>${runHint(run.requireDoorSensor, c.requireDoorSensor, v => v ? 'bật' : 'tắt')}
+        <label class="chk"><input type="checkbox" data-opt="lidBypassPhysicalMotion"${c.lidBypassPhysicalMotion ? ' checked' : ''}> Lệnh nắp của drone chỉ giả lập, không quay động cơ</label>${runHint(run.lidBypassPhysicalMotion, c.lidBypassPhysicalMotion, v => v ? 'bật' : 'tắt')}
+      </div>
+    </div>
+    <h2>Nắp trượt</h2>
+    <div class="grid2">${lidCards}</div>
+    ${renderSystem()}
+    <div class="row" style="justify-content:space-between"><h2>Bảng đấu nối</h2>
+      <span class="row">${hw.defaultWiring ? '<span class="badge warn">Chưa lưu — đang hiện bảng mẫu TU01</span>' : ''}
+        <button type="button" data-act="w-add">+ Thêm dòng</button>
+        <button type="button" data-act="w-default">Nạp bảng mẫu TU01</button></span></div>
+    <p class="small muted">Mọi dây vào Pi: chọn <b>chân Pi</b> và <b>vai trò</b>. Dòng tín hiệu (relay, cảm biến, PUL−, DIR−, công tắc) gắn với bản đồ chân ở trên — đổi chân ở đây là đổi cấu hình chạy, và ngược lại. Dây nguồn/mát (DC+, DC−, mát cảm biến, PUL+, DIR+…) phải nối đúng loại chân. Dây không vào Pi (nguồn tổ ong, động cơ…) để "không vào Pi" và ghi ở cột Từ.</p>
+    <div class="tablewrap"><table><thead><tr><th>Nhóm</th><th>Chân Pi</th><th>Vai trò</th><th>Từ</th>${WIRE_TEXT.map(([, h]) => `<th>${h}</th>`).join('')}<th></th></tr></thead>
+      <tbody>${wireRows}</tbody></table></div>
+    <div class="savebar">
+      <button type="button" class="primary" data-act="save" id="cfgSave">Lưu</button>
+      <button type="button" data-act="undo">Bỏ thay đổi</button>
+      <button type="button" data-act="running">Lấy lại cấu hình đang chạy</button>
+      <span class="small muted" id="cfgSaveNote"></span>
+    </div>`;
+  renderConfigStatus();
+}
+function renderConfigStatus() {
+  if (!hw || !$('#cfgStatus')) return;
+  const issues = hwIssues();
+  $('#cfgIssues').innerHTML = issues.map(x => `<li>${esc(x)}</li>`).join('');
+  $('#cfgWarnings').innerHTML = hwWarnings().map(x => `<li>${esc(x)}</li>`).join('');
+  $('#cfgStatus').innerHTML = (hw.saved ? '<span class="badge ok">Đang chạy theo cấu hình đã lưu trên Pi</span>' : '<span class="badge">Đang chạy theo .env</span>') +
+    (hw.dirty ? ' <span class="badge warn">Có thay đổi chưa lưu</span>' : '');
+  // Chưa lưu lần nào (đang hiện bảng mẫu) thì cho lưu luôn để bảng mẫu thành cấu hình của tủ.
+  $('#cfgSave').disabled = !(hw.dirty || hw.defaultWiring) || issues.length > 0 || !!hw.busy;
+}
+function renumberBoxes(fn) {   // ô dưới nắp và vai trò dòng đấu nối đổi số theo khi xoá/đổi chỗ ô
+  hw.cfg.lids.forEach(l => { l.boxes = l.boxes.map(fn).filter(b => b !== null).sort((a, b) => a - b); });
+  hw.wiring.forEach(r => {
+    const m = /^(relay|door):(\d+)$/.exec(r.role || '');
+    if (!m) return;
+    const to = fn(+m[2]);
+    if (to === null) { r.role = ''; r.note = `${r.note || ''} (ô đã bỏ)`.trim(); } else r.role = `${m[1]}:${to}`;
+  });
+}
+function changedCfg() { syncRows(); hw.dirty = true; renderConfig(); }
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (!hw || !t.closest('#cfg')) return;
+  const c = hw.cfg;
+  if (t.dataset.w !== undefined) {               // bảng đấu nối: chân / vai trò
+    const row = hw.wiring[+t.dataset.w];
+    if (t.dataset.f === 'pin') { row.pin = t.value === '' ? null : +t.value; rowToCfg(row); }
+    else if (t.dataset.f === 'role') { row.role = t.value; rowToCfg(row); }
+    else return;                                  // ô chữ đã xử lý ở sự kiện input
+    return changedCfg();
+  }
+  if (t.dataset.pin) c[t.dataset.pin][+t.dataset.i] = +t.value;
+  else if (t.dataset.opt === 'unlockMs') c.unlockMs = +t.value;
+  else if (t.dataset.opt) c[t.dataset.opt] = t.type === 'checkbox' ? t.checked : t.value === '1';
+  else if (t.dataset.lid) {
+    const l = c.lids.find(x => x.axis === +t.dataset.lid);
+    if (t.dataset.box) l.boxes = t.checked ? [...l.boxes, +t.dataset.box].sort((a, b) => a - b) : l.boxes.filter(b => b !== +t.dataset.box);
+    else if (t.dataset.k === 'enabled') {
+      l.enabled = t.checked;
+      if (l.enabled) Object.entries(LID_ROLE).forEach(([s, k]) => {   // bật trục: lấy chân từ dòng dự kiến
+        const row = hw.wiring.find(r => r.role === `lid${l.axis}:${s}` && pinType(r.pin) === 'GPIO');
+        if (row) l[k] = PIN_TO_GPIO[row.pin];
+      });
+    }
+    else if (t.dataset.k === 'openDirHigh' || t.dataset.k === 'limitActiveLow') l[t.dataset.k] = t.value === '1';
+    else l[t.dataset.k] = +t.value;
+  } else return;
+  changedCfg();
+});
+document.addEventListener('input', e => {   // gõ chữ: không vẽ lại để khỏi mất con trỏ
+  const t = e.target;
+  if (hw && t.dataset.sys && t.closest('#cfg')) {
+    sysInput(t);
+    if (t.dataset.sys === 'mqttTransport' || t.dataset.sys === 'bleEnabled') renderConfig();   // hiện/ẩn ô phụ
+    else renderConfigStatus();
+    return;
+  }
+  if (!hw || !t.closest('#cfg') || t.dataset.w === undefined || t.tagName !== 'INPUT') return;
+  hw.wiring[+t.dataset.w][t.dataset.f] = t.value;
+  hw.dirty = true;
+  renderConfigStatus();
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('#cfg button[data-act]');
+  if (!b || !hw || hw.busy) return;
+  const c = hw.cfg, i = +b.dataset.i, act = b.dataset.act;
+  const swap = (arr, a, z) => { [arr[a], arr[z]] = [arr[z], arr[a]]; };
+  if (act === 'box-add') {
+    const used = new Set(hwUsage(c).keys()), free = GPIOS.filter(g => !used.has(g));
+    c.relayPins.push(free[0] ?? 2); c.doorPins.push(free[1] ?? 3);
+  } else if (act === 'box-del') {
+    c.relayPins.splice(i, 1); c.doorPins.splice(i, 1);
+    renumberBoxes(x => x === i + 1 ? null : x > i + 1 ? x - 1 : x);
+  } else if (act === 'box-up' || act === 'box-down') {
+    const j = act === 'box-up' ? i - 1 : i + 1;
+    swap(c.relayPins, i, j); swap(c.doorPins, i, j);
+    renumberBoxes(x => x === i + 1 ? j + 1 : x === j + 1 ? i + 1 : x);
+  } else if (act === 'w-add') hw.wiring.push({ group: '', pin: null, role: '', from: '', wire: '', to: '', via: '', note: '' });
+  else if (act === 'w-del') hw.wiring.splice(i, 1);
+  else if (act === 'w-up' || act === 'w-down') swap(hw.wiring, i, act === 'w-up' ? i - 1 : i + 1);
+  else if (act === 'w-default') hw.wiring = clone(hw.defaultWiringRows || []);
+  else if (act === 'running') hw.cfg = clone(hw.running);
+  else if (act === 'undo') { hw.dirty = false; loadHardware(true); return; }
+  else if (act === 'save') { saveHardware(); return; }
+  else return;
+  changedCfg();
+});
+async function saveHardware() {
+  hw.busy = true; renderConfigStatus();
+  $('#cfgSaveNote').textContent = 'Đang lưu…';
+  try {
+    const r = await api('/hardware', { method: 'PUT', body: { config: hw.cfg, wiring: hw.wiring, system: sysPayload() } });
+    (r.warnings || []).forEach(w => toast(w, true));
+    hw.dirty = false;
+    if (r.restarting) {
+      toast('Đã lưu. Bộ điều khiển đang khởi động lại để chạy theo cấu hình mới (khoảng 10 giây).');
+      $('#cfgSaveNote').textContent = 'Đang khởi động lại bộ điều khiển…';
+      setTimeout(() => loadHardware(true), 12000);
+      return;
+    }
+    toast('Đã lưu (không cần khởi động lại).');
+    loadHardware(true);
+  } catch (err) {
+    hw.busy = false;
+    $('#cfgSaveNote').textContent = '';
+    toast('Không lưu được: ' + err.message, true);
+    renderConfigStatus();
+  }
+}
+
+// ─── Kết nối & Nâng cao (đè .env như bản đồ chân; mật khẩu không bao giờ gửi về trang) ───
+const SYS_INT = ['mqttPort', 'mqttPortSsl', 'doorSettleMs'];
+function sysEditable(run) {
+  const out = clone(run);
+  delete out.mqttPasswordSet;
+  Object.keys(out).forEach(k => { if (out[k] === null) out[k] = ''; });
+  out.mqttPassword = '';
+  return out;
+}
+function sysIssues(s) {
+  const out = [], port = p => Number.isInteger(p) && p >= 1 && p <= 65535;
+  if (s.lockerId !== '' && !/^\d{1,10}$/.test(s.lockerId)) out.push('Mã tủ phải là số (id tủ trên admin) hoặc để trống');
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(s.mqttBroker)) out.push('Địa chỉ broker MQTT không hợp lệ (tên máy hoặc IP, không có http://)');
+  if (!port(s.mqttPort) || !port(s.mqttPortSsl)) out.push('Cổng MQTT phải từ 1 tới 65535');
+  if (!/^\/\S{0,99}$/.test(s.mqttWsPath)) out.push('Đường dẫn WebSocket phải bắt đầu bằng / và không có khoảng trắng');
+  if (/\s/.test(s.mqttUsername)) out.push('Tài khoản MQTT không được có khoảng trắng');
+  if (s.mqttPassword && !s.mqttUseTls) out.push('Có mật khẩu MQTT thì phải bật TLS');
+  if (s.backendApiUrl !== '' && !/^https?:\/\/[^\s"'<>]{1,200}$/.test(s.backendApiUrl)) out.push('Địa chỉ backend phải dạng https://…');
+  if (!(Number.isInteger(s.doorSettleMs) && s.doorSettleMs >= 0 && s.doorSettleMs <= 10000)) out.push('Thời gian chờ cửa bật phải từ 0 tới 10000 ms');
+  if (s.bleDeviceName.length > 29) out.push('Tên Bluetooth tối đa 29 ký tự');
+  return out;
+}
+function sysField(k, label, kind, extra = '') {
+  const v = hw.sys[k], run = hw.sysRun[k];
+  const shown = kind === 'bool' ? (x => x ? 'bật' : 'tắt') : null;
+  let input;
+  if (kind === 'bool') input = `<label class="chk"><input type="checkbox" data-sys="${k}" data-kind="bool"${v ? ' checked' : ''}> ${label}</label>`;
+  else if (kind === 'int') input = `<input type="number" data-sys="${k}" data-kind="int" value="${Number.isFinite(v) ? v : ''}" ${extra}>`;
+  else input = `<input type="text" data-sys="${k}" value="${esc(v)}" ${extra}>`;
+  return kind === 'bool' ? `<div>${input}${runHint(run, v, shown)}</div>` : `<label class="f">${label}${input}${runHint(run, v, shown)}</label>`;
+}
+function sysSelect(k, label, options) {
+  const v = hw.sys[k];
+  return `<label class="f">${label}<select data-sys="${k}">${options.map(([val, name]) =>
+    `<option value="${val}"${String(v) === val ? ' selected' : ''}>${name}</option>`).join('')}</select>${runHint(String(hw.sysRun[k]), String(v), x => (options.find(o => o[0] === x) || [, x])[1])}</label>`;
+}
+function renderSystem() {
+  const s = hw.sys, cab = data && data.system && data.system.cabinet;
+  return `
+    <h2>Kết nối máy chủ</h2>
+    <p class="small muted">Pi nhận lệnh qua MQTT và gọi API backend. Đổi mục nào ⇒ bộ điều khiển khởi động lại. Sai broker/mật khẩu thì tủ mất kết nối với web (bảng này vẫn dùng được để sửa lại).
+      ${cab ? `Hiện đang phục vụ tủ <b>${esc(cab.name || '')}</b> (id ${esc(cab.id)}).` : ''}</p>
+    <div class="grid2">
+      ${sysField('lockerId', 'Mã tủ (id số trên admin; trống = chờ admin gán)', 'str', 'inputmode="numeric" maxlength="10"')}
+      ${sysField('backendApiUrl', 'Địa chỉ backend', 'str', 'placeholder="https://…" maxlength="200"')}
+      ${sysField('mqttBroker', 'Broker MQTT (tên máy hoặc IP)', 'str', 'maxlength="253"')}
+      ${sysSelect('mqttTransport', 'Kiểu kết nối MQTT', [['tcp', 'TCP'], ['websockets', 'WebSocket']])}
+      ${sysField('mqttPort', 'Cổng không mã hoá', 'int', 'min="1" max="65535"')}
+      ${sysField('mqttPortSsl', 'Cổng TLS', 'int', 'min="1" max="65535"')}
+      ${s.mqttTransport === 'websockets' ? sysField('mqttWsPath', 'Đường dẫn WebSocket', 'str', 'maxlength="100"') : ''}
+      ${sysField('mqttUsername', 'Tài khoản MQTT', 'str', 'autocomplete="off" maxlength="128"')}
+      <label class="f">Mật khẩu MQTT<input type="password" data-sys="mqttPassword" value="${esc(s.mqttPassword)}" autocomplete="new-password" maxlength="256"
+        placeholder="${hw.sysRun.mqttPasswordSet ? 'đã đặt — để trống = giữ nguyên' : 'chưa đặt'}"></label>
+      ${sysField('mqttUseTls', 'Dùng TLS (mã hoá) khi nối broker', 'bool')}
+    </div>
+    <h2>Nâng cao</h2>
+    <div class="grid2">
+      ${sysSelect('hardwareBackend', 'Cách điều khiển khoá', [['gpio', 'GPIO trên Pi (module relay)'], ['rs485', 'Board khoá RS485 qua USB']])}
+      ${sysField('doorSettleMs', 'Chờ cửa bật ra trước khi đọc cảm biến (ms, 0–10000)', 'int', 'min="0" max="10000" step="50"')}
+      ${sysSelect('lidStepActiveLow', 'Xung PUL/DIR của driver nắp', [['true', 'tích cực mức thấp (PUL+/DIR+ lên 3,3 V)'], ['false', 'tích cực mức cao (PUL−/DIR− xuống GND)']])}
+      ${sysField('bleEnabled', 'Bật mở ô bằng Bluetooth', 'bool')}
+      ${s.bleEnabled ? sysField('bleDeviceName', 'Tên Bluetooth (tối đa 29 ký tự)', 'str', 'maxlength="29"') : ''}
+    </div>`;
+}
+function sysInput(t) {
+  const k = t.dataset.sys;
+  if (t.dataset.kind === 'bool') hw.sys[k] = t.checked;
+  else if (t.dataset.kind === 'int') hw.sys[k] = t.value === '' ? NaN : Number(t.value);
+  else if (k === 'lidStepActiveLow') hw.sys[k] = t.value === 'true';
+  else hw.sys[k] = t.value;
+  hw.dirty = true;
+}
+function sysPayload() {
+  const out = clone(hw.sys);
+  if (!out.mqttPassword) delete out.mqttPassword;   // trống = giữ mật khẩu đang có
+  return out;
+}
+
+/* ─── Wi-Fi: lưu mạng không làm rớt mạng đang dùng; "Chuyển ngay" tự quay về nếu mạng mới không vào được ─── */
+let wf = { st: null, err: null, scan: null, busy: false, form: { ssid: '', password: '', priority: 10 }, poll: null };
+async function loadWifi() {
+  try { wf.st = await api('/wifi'); wf.err = null; } catch (e) { wf.err = e.message; }
+  renderWifi();
+}
+function renderWifi() {
+  const el = $('#wifi');
+  if (!el) return;
+  const head = '<h2>Wi-Fi</h2>';
+  if (!wf.st) { el.innerHTML = head + (wf.err ? `<p class="note err">${esc(wf.err)}</p>` : '<p class="muted">Đang đọc…</p>'); return; }
+  const st = wf.st, last = st.lastSwitch, f = wf.form, dis = wf.busy ? ' disabled' : '';
+  const lastNote = wf.poll ? `<p class="note">Đang chuyển mạng… Nếu trang mất kết nối, đợi 1–2 phút rồi vào lại Pi.</p>`
+    : !last ? '' : last.ok ? `<p class="note">Lần chuyển gần nhất: đã vào <b>${esc(last.target)}</b>.</p>`
+    : `<p class="note err">Lần chuyển gần nhất sang <b>${esc(last.target)}</b> không được (${esc(last.error || '')}) — ${last.reverted ? `đã tự quay về <b>${esc(last.previous)}</b>` : 'quay về mạng cũ cũng lỗi, kiểm tra Pi'}.</p>`;
+  const rows = st.saved.map(n => `<tr>
+      <td><b>${esc(n.name)}</b>${n.ssid !== n.name ? ` <span class="small muted">(${esc(n.ssid)})</span>` : ''}</td>
+      <td>${n.active ? '<span class="badge ok">Đang dùng</span>' : n.autoconnect ? '<span class="small muted">tự vào khi có</span>' : '<span class="small muted">không tự vào</span>'}</td>
+      <td><input type="number" min="-999" max="999" value="${n.priority}" data-wprio="${esc(n.name)}" style="width:90px"></td>
+      <td class="acts"><button type="button" data-wact="prio" data-name="${esc(n.name)}"${dis}>Đặt ưu tiên</button>
+        <button type="button" data-wact="switch" data-name="${esc(n.name)}"${n.active ? ' disabled' : dis}>Chuyển ngay</button>
+        <button type="button" data-wact="del" data-name="${esc(n.name)}" title="Xoá mạng"${n.active ? ' disabled' : dis}>✕</button></td></tr>`).join('');
+  el.innerHTML = `${head}
+    <p class="small muted">IP hiện tại: <b class="mono">${esc(st.ip || 'chưa có')}</b>. Pi tự vào mạng đã lưu đang phát có <b>ưu tiên cao nhất</b>. Lưu mạng mới <b>không</b> làm rớt mạng đang dùng — khi đem tủ sang chỗ khác, Pi tự vào mạng đó. "Chuyển ngay" thử mạng mới khoảng 1 phút, không vào được thì tự quay về mạng cũ.</p>
+    ${lastNote}
+    <div class="tablewrap"><table><thead><tr><th>Mạng đã lưu</th><th>Trạng thái</th><th>Ưu tiên</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4" class="muted">Chưa lưu mạng nào</td></tr>'}</tbody></table></div>
+    <h2>Thêm hoặc sửa mạng</h2>
+    <div class="grid2">
+      <label class="f">Tên Wi-Fi (SSID)<input type="text" data-wf="ssid" value="${esc(f.ssid)}" maxlength="32" autocomplete="off"></label>
+      <label class="f">Mật khẩu (8–63 ký tự; trống = mạng mở, hoặc giữ mật khẩu cũ khi sửa)<input type="password" data-wf="password" value="${esc(f.password)}" maxlength="63" autocomplete="new-password"></label>
+      <label class="f">Ưu tiên (cao hơn được chọn trước)<input type="number" data-wf="priority" value="${f.priority}" min="-999" max="999"></label>
+    </div>
+    <div class="row"><button type="button" class="primary" data-wact="add"${dis}>Lưu Wi-Fi</button>
+      <button type="button" data-wact="scan"${dis}>${wf.busy === 'scan' ? 'Đang quét…' : 'Quét mạng xung quanh'}</button></div>
+    ${wf.scan ? `<div class="nets">${wf.scan.length ? wf.scan.map(n =>
+      `<button type="button" data-wact="pick" data-name="${esc(n.ssid)}" title="${esc(n.security || 'mạng mở')}">${esc(n.ssid)} · ${n.signal}%${n.security ? '' : ' · mở'}</button>`).join('') : '<span class="muted small">Không thấy mạng nào</span>'}</div>` : ''}`;
+}
+async function wifiAction(fn, okMsg) {
+  wf.busy = true; renderWifi();
+  try { const r = await fn(); if (okMsg) toast(okMsg); return r; }
+  catch (e) { toast(e.message, true); }
+  finally { wf.busy = false; await loadWifi(); }
+}
+function watchSwitch() {        // đợi file kết quả của lần chuyển; trang có thể mất kết nối giữa chừng
+  clearInterval(wf.poll);
+  const started = Date.now();
+  wf.poll = setInterval(async () => {
+    try { wf.st = await api('/wifi'); } catch (e) { return; }
+    if (wf.st.lastSwitch || Date.now() - started > 180000) {
+      clearInterval(wf.poll); wf.poll = null;
+      const last = wf.st.lastSwitch;
+      if (last) toast(last.ok ? `Đã chuyển sang ${last.target}` : `Không vào được ${last.target} — ${last.reverted ? 'đã quay về ' + last.previous : 'quay về cũng lỗi'}`, !last.ok);
+    }
+    renderWifi();
+  }, 4000);
+  renderWifi();
+}
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset.wf) wf.form[t.dataset.wf] = t.dataset.wf === 'priority' ? Number(t.value) : t.value;
+});
+document.addEventListener('click', async e => {
+  const b = e.target.closest('#wifi button[data-wact]');
+  if (!b || wf.busy) return;
+  const name = b.dataset.name, path = name !== undefined ? '/wifi/' + encodeURIComponent(name) : '';
+  const act = b.dataset.wact;
+  if (act === 'pick') { wf.form.ssid = name; wf.form.password = ''; renderWifi(); return; }
+  if (act === 'scan') {
+    wf.busy = 'scan'; renderWifi();
+    try { wf.scan = await api('/wifi/scan'); } catch (err) { toast(err.message, true); }
+    wf.busy = false; renderWifi(); return;
+  }
+  if (act === 'add') {
+    const f = wf.form;
+    if (!f.ssid) return toast('Nhập tên Wi-Fi', true);
+    if (f.password && (f.password.length < 8 || f.password.length > 63)) return toast('Mật khẩu Wi-Fi phải từ 8 tới 63 ký tự', true);
+    const r = await wifiAction(() => api('/wifi', { method: 'POST', body: { ssid: f.ssid, password: f.password || null, priority: Number.isInteger(f.priority) ? f.priority : 10 } }));
+    if (r) { toast(r.updated ? `Đã cập nhật ${r.name}` : `Đã lưu ${r.name}. Pi sẽ tự vào khi có mạng này (hoặc bấm Chuyển ngay).`); wf.form = { ssid: '', password: '', priority: 10 }; renderWifi(); }
+    return;
+  }
+  if (act === 'prio') {
+    const v = Number(document.querySelector(`#wifi input[data-wprio="${CSS.escape(name)}"]`).value);
+    if (!Number.isInteger(v)) return toast('Ưu tiên phải là số nguyên', true);
+    return wifiAction(() => api(path + '/priority', { method: 'PUT', body: { priority: v } }), `Ưu tiên ${name}: ${v}`);
+  }
+  if (act === 'del') {
+    if (!confirm(`Xoá mạng ${name} khỏi Pi?`)) return;
+    return wifiAction(() => api(path, { method: 'DELETE' }), `Đã xoá ${name}`);
+  }
+  if (act === 'switch') {
+    const cur = (wf.st.saved.find(n => n.active) || {}).name;
+    if (!confirm(`Chuyển Pi sang ${name}?\n\nPi thử vào mạng này khoảng 1 phút; không vào được sẽ tự quay về ${cur}.\nTrong lúc chuyển, trang này và SSH sẽ mất kết nối. Nếu vào được mạng mới, máy bạn phải cùng mạng ${name} mới vào lại Pi được.`)) return;
+    const r = await wifiAction(() => api(path + '/switch', { method: 'POST' }));
+    if (r) watchSwitch();
+  }
+});
+
 refresh();
 loadLayout();
 setInterval(() => { if (!document.hidden) refresh(); }, 1000);

@@ -10,16 +10,25 @@ Không import `config.settings` ở đây: settings.py gọi `apply_overlay` lú
 """
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 from typing import Optional
 
 DEFAULT_FILE = str(Path(__file__).parent / "hardware_config.json")
+# Sơ đồ đấu dây mẫu của tủ TU01 (bảng tay của chủ tủ 2026-10-27) — hiện khi Pi chưa lưu sơ đồ nào.
+DEFAULT_WIRING_FILE = str(Path(__file__).parent / "wiring_default.json")
+# Một dòng đấu dây: nhóm, chân Pi (từ), tên dây, tới (relay/domino/driver), qua, ghi chú. Pi không dùng để chạy.
+WIRING_FIELDS = ("group", "from", "wire", "to", "via", "note")
+MAX_WIRING_ROWS = 300
+MAX_WIRING_TEXT = 300
 
 # Chân BCM có trên header 40 chân (0, 1 là EEPROM của HAT — không dùng).
 VALID_GPIO = range(2, 28)
 UNLOCK_MS_RANGE = (100, 10000)
 MAX_BOXES = 16
 LID_PIN_KEYS = ("pulPin", "dirPin", "homePin", "endPin")
+LID_PIN_NAMES = {"pulPin": "PUL−", "dirPin": "DIR−", "homePin": "công tắc gốc", "endPin": "công tắc cuối"}
 
 # Trục ⇒ tiền tố biến môi trường (trục 1 dùng LID_*, trục 2 dùng LID2_*).
 _LID_PREFIX = {1: "LID", 2: "LID2"}
@@ -103,9 +112,9 @@ def validate(cfg) -> list:
         for key in LID_PIN_KEYS:
             pin = lid.get(key)
             if not isinstance(pin, int) or isinstance(pin, bool):
-                errors.append(f"Trục {axis}: thiếu chân {key}")
+                errors.append(f"Trục {axis}: thiếu chân {LID_PIN_NAMES[key]}")
             elif lid.get("enabled") is True:
-                used.append((pin, f"trục {axis} {key}"))
+                used.append((pin, f"{LID_PIN_NAMES[key]} trục {axis}"))
         boxes = lid.get("boxes")
         if not isinstance(boxes, list) or not all(isinstance(b, int) and not isinstance(b, bool) for b in boxes):
             errors.append(f"Trục {axis}: boxes phải là danh sách số ô")
@@ -154,7 +163,8 @@ def save(cfg: dict, path: str = DEFAULT_FILE):
     if os.path.exists(path):
         os.replace(path, f"{path}.bak")
     tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # Có thể chứa mật khẩu MQTT (mục Kết nối) ⇒ chỉ chủ file đọc được, như `.env`.
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
@@ -174,7 +184,337 @@ def apply_overlay(path: Optional[str] = None) -> Optional[dict]:
     if validate(cfg):
         return None
     os.environ.update(to_env(cfg))
+    system = cfg.get("system")
+    if isinstance(system, dict) and not validate_system(system):
+        os.environ.update(system_to_env(system))
     return cfg
+
+
+# ─── kết nối & nâng cao (mục "Kết nối", "Nâng cao" của tab Cấu hình trên Pi) ───
+# trường → (biến môi trường, kiểu). Chỉ sửa trên Pi; lệnh hw-config từ admin giữ nguyên phần này.
+SYSTEM_FIELDS = {
+    "lockerId": ("LOCKER_ID", "str"),
+    "mqttBroker": ("MQTT_BROKER", "str"),
+    "mqttPort": ("MQTT_PORT", "int"),
+    "mqttPortSsl": ("MQTT_PORT_SSL", "int"),
+    "mqttUseTls": ("MQTT_USE_TLS", "bool"),
+    "mqttTransport": ("MQTT_TRANSPORT", "str"),
+    "mqttWsPath": ("MQTT_WS_PATH", "str"),
+    "mqttUsername": ("MQTT_USERNAME", "str"),
+    "mqttPassword": ("MQTT_PASSWORD", "secret"),
+    "backendApiUrl": ("BACKEND_API_URL", "str"),
+    "doorSettleMs": ("DOOR_SETTLE_MS", "int"),
+    "lidStepActiveLow": ("LID_STEP_ACTIVE_LOW", "bool"),
+    "hardwareBackend": ("HARDWARE_BACKEND", "str"),
+    "bleEnabled": ("BLE_ENABLED", "bool"),
+    "bleDeviceName": ("BLE_DEVICE_NAME", "str"),
+}
+_HOST = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+_URL = re.compile(r"^https?://[^\s\"'<>]{1,200}$")
+_PRINTABLE = re.compile(r"^[^\x00-\x1f\x7f]*$")
+
+
+def validate_system(system) -> list:
+    """Lỗi của phần Kết nối/Nâng cao (rỗng = hợp lệ). Thiếu trường nào thì trường đó giữ theo `.env`."""
+    if not isinstance(system, dict):
+        return ["Phần kết nối phải là một đối tượng JSON"]
+    errors = []
+    for key, value in system.items():
+        if key not in SYSTEM_FIELDS:
+            errors.append(f"Không có tuỳ chọn {key}")
+            continue
+        kind = SYSTEM_FIELDS[key][1]
+        if kind == "bool" and not isinstance(value, bool):
+            errors.append(f"{key} phải là true hoặc false")
+        elif kind == "int" and (not isinstance(value, int) or isinstance(value, bool)):
+            errors.append(f"{key} phải là số nguyên")
+        elif kind in ("str", "secret") and not isinstance(value, str):
+            errors.append(f"{key} phải là chuỗi")
+    if errors:
+        return errors
+    lid = system.get("lockerId")
+    if lid not in (None, "") and not (lid.isdigit() and len(lid) <= 10):
+        errors.append("Mã tủ phải là số (id tủ trên admin) hoặc để trống")
+    broker = system.get("mqttBroker")
+    if broker is not None and not _HOST.match(broker):
+        errors.append("Địa chỉ broker MQTT không hợp lệ (tên máy hoặc IP, không có http://)")
+    for key in ("mqttPort", "mqttPortSsl"):
+        if key in system and not 1 <= system[key] <= 65535:
+            errors.append(f"Cổng {key} phải từ 1 tới 65535")
+    if system.get("mqttTransport") not in (None, "tcp", "websockets"):
+        errors.append("Kiểu kết nối MQTT phải là tcp hoặc websockets")
+    ws = system.get("mqttWsPath")
+    if ws is not None and not (ws.startswith("/") and len(ws) <= 100 and _PRINTABLE.match(ws) and " " not in ws):
+        errors.append("Đường dẫn WebSocket phải bắt đầu bằng / và không có khoảng trắng")
+    user = system.get("mqttUsername")
+    if user is not None and (len(user) > 128 or not _PRINTABLE.match(user) or " " in user):
+        errors.append("Tài khoản MQTT không hợp lệ")
+    pw = system.get("mqttPassword")
+    if pw is not None and (len(pw) > 256 or not _PRINTABLE.match(pw)):
+        errors.append("Mật khẩu MQTT quá dài hoặc có ký tự điều khiển")
+    if pw and system.get("mqttUseTls") is False:
+        errors.append("Có mật khẩu MQTT thì phải bật TLS (Pi không gửi mật khẩu qua kết nối không mã hoá)")
+    url = system.get("backendApiUrl")
+    if url not in (None, "") and not _URL.match(url):
+        errors.append("Địa chỉ backend phải dạng https://…")
+    if "doorSettleMs" in system and not 0 <= system["doorSettleMs"] <= 10000:
+        errors.append("Thời gian chờ cửa bật phải từ 0 tới 10000 ms")
+    if system.get("hardwareBackend") not in (None, "gpio", "rs485"):
+        errors.append("Phần cứng phải là gpio hoặc rs485")
+    name = system.get("bleDeviceName")
+    if name is not None and (len(name) > 29 or not _PRINTABLE.match(name)):
+        errors.append("Tên Bluetooth tối đa 29 ký tự")
+    return errors
+
+
+def system_to_env(system: dict) -> dict:
+    env = {}
+    for key, value in system.items():
+        name, kind = SYSTEM_FIELDS[key]
+        env[name] = ("true" if value else "false") if kind == "bool" else str(value)
+    return env
+
+
+def effective_system(settings) -> dict:
+    """Kết nối/Nâng cao đang chạy. Không bao giờ trả mật khẩu — chỉ cho biết đã đặt hay chưa."""
+    return {
+        "lockerId": str(settings.LOCKER_ID or ""),
+        "mqttBroker": settings.MQTT_BROKER,
+        "mqttPort": int(settings.MQTT_PORT),
+        "mqttPortSsl": int(settings.MQTT_PORT_SSL),
+        "mqttUseTls": bool(settings.MQTT_USE_TLS),
+        "mqttTransport": settings.MQTT_TRANSPORT,
+        "mqttWsPath": settings.MQTT_WS_PATH,
+        "mqttUsername": settings.MQTT_USERNAME,
+        "mqttPasswordSet": bool(settings.MQTT_PASSWORD),
+        "backendApiUrl": settings.BACKEND_API_URL,
+        "doorSettleMs": int(settings.DOOR_SETTLE_MS),
+        "lidStepActiveLow": bool(settings.LID_STEP_ACTIVE_LOW),
+        "hardwareBackend": settings.HARDWARE_BACKEND,
+        "bleEnabled": bool(settings.BLE_ENABLED),
+        "bleDeviceName": settings.BLE_DEVICE_NAME,
+    }
+
+
+def merge_system(new: dict, saved: Optional[dict]) -> dict:
+    """Bỏ trường chỉ để hiển thị; mật khẩu để trống ⇒ giữ mật khẩu đã lưu (không có thì giữ `.env`)."""
+    out = {k: v for k, v in new.items() if k in SYSTEM_FIELDS}
+    if not out.get("mqttPassword"):
+        out.pop("mqttPassword", None)
+        if saved and saved.get("mqttPassword"):
+            out["mqttPassword"] = saved["mqttPassword"]
+    return out
+
+
+# ─── bảng đấu nối: mỗi dòng có chân Pi (1–40) và vai trò ───
+# Chân vật lý trên header 40 chân → GPIO (BCM). Chân 27, 28 là EEPROM của HAT, không dùng.
+PIN_TO_GPIO = {3: 2, 5: 3, 7: 4, 29: 5, 31: 6, 26: 7, 24: 8, 21: 9, 19: 10, 23: 11, 32: 12, 33: 13, 8: 14,
+               10: 15, 36: 16, 11: 17, 12: 18, 35: 19, 38: 20, 40: 21, 15: 22, 16: 23, 18: 24, 22: 25, 37: 26, 13: 27}
+GPIO_TO_PIN = {g: p for p, g in PIN_TO_GPIO.items()}
+POWER_PIN_TYPES = {1: "3V3", 17: "3V3", 2: "5V", 4: "5V",
+                   6: "GND", 9: "GND", 14: "GND", 20: "GND", 25: "GND", 30: "GND", 34: "GND", 39: "GND"}
+PIN_TYPE_NAMES = {"GPIO": "GPIO", "3V3": "3,3 V", "5V": "5 V", "GND": "GND"}
+_LID_ROLE_KEY = {"pul": "pulPin", "dir": "dirPin", "home": "homePin", "end": "endPin"}
+_LID_ROLE_NAME = {"pul": "PUL−", "dir": "DIR−", "home": "công tắc gốc", "end": "công tắc cuối",
+                  "pul+": "PUL+", "dir+": "DIR+"}
+ROLE_PATTERN = re.compile(r"^(relay:(\d+|dc\+|dc-)|door:(\d+|gnd)|lid[12]:(pul|dir|home|end|pul\+|dir\+)|switch:(vcc|gnd))$")
+
+
+def pin_type(pin) -> Optional[str]:
+    if pin in PIN_TO_GPIO:
+        return "GPIO"
+    return POWER_PIN_TYPES.get(pin)
+
+
+def role_info(role: str):
+    """(tên tiếng Việt, loại chân cần) của một vai trò; vai trò rỗng = ghi chú tự do."""
+    if not role:
+        return "khác", None
+    kind, _, arg = role.partition(":")
+    if kind == "relay":
+        return ({"dc+": ("nguồn relay DC+", "5V"), "dc-": ("mát relay DC−", "GND")}.get(arg)
+                or (f"relay ô {arg}", "GPIO"))
+    if kind == "door":
+        return ("mát cảm biến cửa", "GND") if arg == "gnd" else (f"cảm biến cửa ô {arg}", "GPIO")
+    if kind == "switch":
+        return ("nguồn công tắc hành trình", "3V3") if arg == "vcc" else ("mát công tắc hành trình", "GND")
+    axis = kind[3:]
+    return f"{_LID_ROLE_NAME[arg]} trục {axis}", ("3V3" if arg.endswith("+") else "GPIO")
+
+
+def signal_roles(cfg: dict) -> dict:
+    """{vai trò: GPIO} mà bản đồ chân đang dùng. Trục chưa bật không tính — dòng của nó là phương án dự kiến."""
+    out = {}
+    for i, gpio in enumerate(cfg["relayPins"]):
+        out[f"relay:{i + 1}"] = gpio
+    for i, gpio in enumerate(cfg["doorPins"]):
+        out[f"door:{i + 1}"] = gpio
+    for lid in cfg["lids"]:
+        if lid.get("enabled"):
+            for short, key in _LID_ROLE_KEY.items():
+                out[f"lid{lid['axis']}:{short}"] = lid[key]
+    return out
+
+
+def _role_group(role: str) -> str:
+    kind = role.split(":", 1)[0]
+    return {"relay": "Relay", "door": "Cảm biến cửa"}.get(kind, f"Nắp trục {kind[3:]}")
+
+
+def sync_rows(cfg: dict, rows: list) -> list:
+    """Cho bảng đấu nối khớp bản đồ chân: dòng tín hiệu nhận đúng chân, thiếu thì thêm, ô đã bỏ thì gỡ vai trò."""
+    rows = [dict(r) for r in rows]
+    want, seen, n = signal_roles(cfg), set(), len(cfg["relayPins"])
+    for row in rows:
+        role = row.get("role") or ""
+        match = re.match(r"^(relay|door):(\d+)$", role)
+        if match and int(match.group(2)) > n:
+            row["role"] = ""
+            row["note"] = f"{row.get('note', '')} (ô đã bỏ)".strip()
+        elif role in want and role not in seen:
+            row["pin"] = GPIO_TO_PIN.get(want[role])
+            seen.add(role)
+    for role, gpio in want.items():
+        if role not in seen:
+            rows.append({"group": _role_group(role), "pin": GPIO_TO_PIN.get(gpio), "role": role, "from": "",
+                         "wire": "", "to": "", "via": "", "note": "Thêm theo cấu hình phần mềm"})
+    return rows
+
+
+def validate_rows(rows: list) -> list:
+    """Vai trò phải nối đúng loại chân; mỗi vai trò tín hiệu chỉ một dòng."""
+    errors, owner = [], {}
+    for i, row in enumerate(rows, start=1):
+        role, pin = row.get("role") or "", row.get("pin")
+        if not role:
+            continue
+        name, needed = role_info(role)
+        if pin is None:
+            errors.append(f"Dòng {i}: {name} chưa chọn chân Pi")
+        elif pin_type(pin) != needed:
+            errors.append(f"Dòng {i}: {name} phải nối chân {PIN_TYPE_NAMES[needed]}, "
+                          f"chân {pin} là {PIN_TYPE_NAMES.get(pin_type(pin), 'chân không dùng được')}")
+        if needed == "GPIO":
+            if role in owner:
+                errors.append(f"Dòng {owner[role]} và dòng {i} cùng là {name}")
+            owner.setdefault(role, i)
+    return errors
+
+
+def sanitize_wiring(rows) -> list:
+    """Chỉ giữ các cột đã biết (chuỗi, cắt độ dài), chân 1–40, vai trò hợp lệ; bỏ dòng trống.
+    Quá MAX_WIRING_ROWS ⇒ ValueError."""
+    if not isinstance(rows, list):
+        return []
+    if len(rows) > MAX_WIRING_ROWS:
+        raise ValueError(f"Sơ đồ đấu dây tối đa {MAX_WIRING_ROWS} dòng")
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        clean = {f: str(row.get(f) or "").strip()[:MAX_WIRING_TEXT] for f in WIRING_FIELDS}
+        pin = row.get("pin")
+        clean["pin"] = pin if isinstance(pin, int) and not isinstance(pin, bool) and 1 <= pin <= 40 else None
+        role = str(row.get("role") or "").strip()
+        clean["role"] = role if ROLE_PATTERN.match(role) else ""
+        if any(clean.values()):
+            out.append(clean)
+    return out
+
+
+def load_default_wiring(path: str = DEFAULT_WIRING_FILE) -> list:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return sanitize_wiring(json.load(f))
+    except (OSError, ValueError):
+        return []
+
+
+def functional(cfg: dict) -> dict:
+    """Phần Pi dùng để chạy (bỏ sơ đồ đấu dây), ô dưới nắp xếp tăng dần — để so hai cấu hình."""
+    out = {k: v for k, v in cfg.items() if k not in ("wiring", "system")}
+    out["lids"] = [{**lid, "boxes": sorted(lid.get("boxes", []))}
+                   for lid in sorted(cfg.get("lids", []), key=lambda l: l.get("axis", 0))]
+    return out
+
+
+def sync_lid_tuning(cfg: dict, path: str):
+    """Chiều mở và mức công tắc trong lid_tuning.json ghi đè `.env` ⇒ đổi theo cấu hình mới."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            tuning = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return
+    changed = False
+    for lid in cfg["lids"]:
+        saved = tuning.get(str(lid["axis"]))
+        if isinstance(saved, dict):
+            saved["open_dir_high"] = lid["openDirHigh"]
+            saved["limit_active_low"] = lid["limitActiveLow"]
+            changed = True
+    if changed:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(tuning, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+
+def update_boot_relay_pins(pins: list, script: str, backend: str) -> Optional[str]:
+    """Chạy scripts/boot_relay_pins.py bằng sudo (dòng `gpio=` + ExecStopPost). Trả cảnh báo nếu không làm được."""
+    if backend != "gpio":
+        return None
+    csv = ",".join(str(int(p)) for p in pins)
+    try:
+        done = subprocess.run(["sudo", "-n", "python3", script, csv], capture_output=True, text=True, timeout=20)
+        report = json.loads(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else {}
+        if done.returncode == 0 and report.get("ok"):
+            return None
+        reason = report.get("error") or done.stderr.strip() or f"mã {done.returncode}"
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        reason = str(e)
+    return (f"Chưa cập nhật được dòng giữ relay ở mức thấp lúc khởi động ({reason}). "
+            f"Chạy tay trên Pi: sudo python3 scripts/boot_relay_pins.py {csv}")
+
+
+def store(cfg, settings, wiring: Optional[list] = None, system: Optional[dict] = None) -> dict:
+    """Đường lưu chung của lệnh hw-config (admin web) và nút Lưu trên bảng /service.
+
+    Kiểm tra ⇒ ghi file (giữ sơ đồ đấu dây / kết nối cũ nếu `wiring` / `system` là None) ⇒ đồng bộ lid_tuning.json ⇒ đổi
+    chân relay thì cập nhật dòng an toàn lúc khởi động. Trả {"errors", "warnings", "config"}; có lỗi
+    thì không ghi gì. Việc khởi động lại để Pi chạy theo bản mới là của nơi gọi.
+    """
+    if isinstance(cfg, dict) and isinstance(cfg.get("lids"), list):
+        cfg = normalize(cfg)
+    errors = validate(cfg)
+    if errors:
+        return {"errors": errors, "warnings": [], "config": cfg}
+    path = settings.HARDWARE_CONFIG_FILE
+    saved = load(path) or {}
+    if wiring is None:
+        wiring = saved.get("wiring")
+    if system is None:
+        system = saved.get("system")
+    else:
+        system = merge_system(system, saved.get("system"))
+        system_errors = validate_system(system)
+        if system_errors:
+            return {"errors": system_errors, "warnings": [], "config": cfg}
+    rows = None
+    if wiring is not None:
+        rows = sync_rows(cfg, sanitize_wiring(wiring))   # chân của dòng tín hiệu luôn theo bản đồ chân
+        row_errors = validate_rows(rows)
+        if row_errors:
+            return {"errors": row_errors, "warnings": [], "config": cfg}
+    cfg = {**functional(cfg), **({"wiring": rows} if rows is not None else {}),
+           **({"system": system} if system else {})}
+    save(cfg, path)
+    sync_lid_tuning(cfg, settings.LID_TUNING_FILE)
+    warnings = []
+    if list(cfg["relayPins"]) != list(settings.GPIO_RELAY_PINS):
+        warning = update_boot_relay_pins(cfg["relayPins"], settings.BOOT_RELAY_SCRIPT, settings.HARDWARE_BACKEND)
+        if warning:
+            warnings.append(warning)
+    return {"errors": [], "warnings": warnings, "config": cfg}
 
 
 def effective(settings, lids: Optional[dict] = None) -> dict:
