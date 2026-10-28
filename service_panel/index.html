@@ -290,12 +290,18 @@ function renderBoxes() {
     cab.style.gridTemplateColumns = 'repeat(auto-fill, minmax(min(190px, 100%), 1fr))';
     cab.innerHTML = boxes.map(b => boxCard(b, null)).join('');
   } else {
-    const rows = Math.max(...cells.map(c => (c.rowIndex || 1) + (isTall(c) ? 1 : 0)));
-    const cols = Math.max(...cells.map(c => (c.colIndex || 0) + 1));
+    // Cột trên máy chủ có thể đánh từ 0 hoặc từ 1 ⇒ tính từ cột nhỏ nhất (như kiosk).
+    const minCol = Math.min(...cells.map(c => c.colIndex || 0));
+    const at = c => ({ r: c.rowIndex || 1, col: (c.colIndex || 0) - minCol + 1 });
+    const own = new Set(cells.map(c => { const p = at(c); return `${p.r}:${p.col}`; }));
+    // Ô XL cao 2 hàng chỉ khi chỗ ngay dưới không có ô khác (như admin web) — không vẽ đè.
+    const spanOf = c => { const p = at(c); return isTall(c) && !own.has(`${p.r + 1}:${p.col}`) ? 2 : 1; };
+    const rows = Math.max(...cells.map(c => at(c).r + spanOf(c) - 1));
+    const cols = Math.max(...cells.map(c => at(c).col));
     const taken = new Set();
     let html = '';
     cells.forEach(c => {
-      const r = c.rowIndex || 1, col = (c.colIndex || 0) + 1, span = isTall(c) ? 2 : 1;
+      const { r, col } = at(c), span = spanOf(c);
       for (let i = 0; i < span; i++) taken.add(`${r + i}:${col}`);
       html += `<div style="grid-row:${r} / span ${span};grid-column:${col};display:grid">${boxCard(byNum.get(c.boxNumber), c)}</div>`;
     });
@@ -308,7 +314,8 @@ function renderBoxes() {
   cab.querySelectorAll('[data-open]').forEach(btn => btn.addEventListener('click', () => openBox(+btn.dataset.open)));
   $('#boxPins').innerHTML = boxes.map(b => `<tr><td><b>Ô ${b.box}</b></td><td>${b.relayChannel}</td><td class="mono">GPIO${b.relayGpio ?? '?'}</td><td class="mono">${b.relayPin ?? '?'}</td><td class="mono">GPIO${b.doorGpio ?? '?'}</td><td class="mono">${b.doorPin ?? '?'}</td></tr>`).join('');
 }
-const isTall = c => c.cellType === 'XL' || c.size === 'XL';
+// Theo loại ô (cellType) như app và admin; chỉ xem kích thước khi máy chủ không gửi loại ô.
+const isTall = c => c.cellType ? c.cellType === 'XL' : c.size === 'XL';
 
 async function openBox(box) {
   if (busyBoxes.has(box)) return;

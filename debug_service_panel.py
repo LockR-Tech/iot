@@ -8,6 +8,7 @@ giả, nắp trượt mô phỏng (công tắc bật khi chạy tới đầu/cu�
 Mở http://127.0.0.1:8000/service. Không chạm phần cứng thật.
 """
 import argparse
+import sys
 
 import uvicorn
 from fastapi import FastAPI
@@ -49,6 +50,8 @@ def _simulate_travel(pins: FakePins, lid: LidController, start_revs: float):
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")   # console Windows mặc định cp1252
     parser = argparse.ArgumentParser()
     parser.add_argument("--locker", type=int, default=None, help="id tủ để lấy sơ đồ ô từ máy chủ")
     parser.add_argument("--port", type=int, default=8000)
