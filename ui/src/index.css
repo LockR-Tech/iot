@@ -387,39 +387,6 @@ html, body, #root {
   border-radius: var(--radius-lg); color: var(--accent);
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
 }
-.pin-row { display: flex; gap: 12px; justify-content: center; margin: 24px 0; }
-.pin-box {
-  width: 54px; height: 70px; border-radius: 14px;
-  background: var(--bg-card); border: 2px solid var(--border);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 28px; font-weight: 700; color: var(--text-primary); transition: var(--transition);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-}
-.pin-box.filled { border-color: var(--accent); background: linear-gradient(180deg, rgba(59,130,246,0.1) 0%, rgba(59,130,246,0.2) 100%); color: var(--accent); box-shadow: 0 0 20px rgba(59,130,246,0.2); transform: translateY(-2px) scale(1.05); }
-.pin-box.success { border-color: var(--success); background: rgba(52,211,153,0.12); }
-.pin-box.error   { border-color: var(--danger); background: rgba(248,113,113,0.12); animation: shake 0.3s; }
-@keyframes shake {
-  0%,100% { transform: translateX(0); }
-  20%,60% { transform: translateX(-5px); }
-  40%,80% { transform: translateX(5px); }
-}
-
-/* ─── Numpad ────────────────────────────────────────────── */
-.numpad {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 12px; max-width: 340px; margin: 0 auto;
-}
-.key {
-  height: 64px; border-radius: 16px; font-size: 24px; font-weight: 700;
-  background: var(--bg-card); border: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: var(--transition); color: var(--text-primary);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-}
-.key:hover { background: var(--bg-card-hover); transform: translateY(-2px); }
-.key:active  { transform: scale(0.92); background: var(--accent); color: white; box-shadow: 0 0 20px rgba(59,130,246,0.3); border-color: var(--accent); }
-.key.fn { font-size: 14px; font-weight: 600; color: var(--text-secondary); background: transparent; box-shadow: none; border-color: transparent; }
-.key.fn:hover { color: var(--text-primary); background: rgba(0,0,0,0.05); }
 
 /* ─── Bàn phím ảo (components/VirtualKeyboard.jsx) ──────── */
 .osk {

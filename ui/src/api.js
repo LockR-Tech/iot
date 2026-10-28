@@ -94,7 +94,6 @@ export const getPayment        = (token, paymentId)   => be('GET', `/api/payment
 export const simulatePayment   = (token, { paymentId, amount }) => be('POST', '/api/payments/simulate', { paymentId, ...(amount ? { amount } : {}) }, token);
 
 // ─── IoT (public) ────────────────────────────────────────────
-export const verifyPin         = (pinCode, boxId)     => be('POST', '/api/iot/verify-pin', { pinCode, boxId });
 export const unlockBox         = (lockerId, pinCode, boxId, actionType) => be('POST', '/api/iot/unlock', { lockerId, pinCode, boxId, actionType });
 export const unlockWithCode    = (lockerId, accessCode)         => be('POST', '/api/iot/unlock-with-code', { lockerId, code: accessCode });
 // Sau khi ô đã mở bằng mã: xác nhận bỏ hàng / kết thúc thuê ngay tại tủ (không cần đăng nhập,

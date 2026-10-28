@@ -4,7 +4,7 @@ import { setupRecaptcha, sendPhoneOtp } from '../firebase';
 import {
   Lock, Package, Smartphone, Mail, ArrowLeft, MapPin,
   CheckCircle, KeyRound, Hash, User, CreditCard,
-  Unlock, Home, Loader2, Delete, Circle, ClipboardList,
+  Unlock, Home, Loader2, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X,
   Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical
 } from 'lucide-react';
@@ -146,7 +146,6 @@ export default function KioskScreen() {
       {screen === 'boxes' && <BoxSelectionScreen go={go} goHome={goHome} jwt={jwt} userName={userName} selectedBox={selectedBox} setSelectedBox={setSelectedBox} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
       {screen === 'order-info' && <OrderInfoScreen go={go} back={back} jwt={jwt} selectedBox={selectedBox} setOrderId={setOrderId} setOrderPin={setOrderPin} setOrderCode={setOrderCode} setTotalPrice={setTotalPrice} activeLockerId={activeLockerId} />}
       {screen === 'payment' && <PaymentScreen go={go} goHome={goHome} jwt={jwt} orderId={orderId} orderPin={orderPin} orderCode={orderCode} totalPrice={totalPrice} selectedBox={selectedBox} showSuccess={showSuccess} activeLockerId={activeLockerId} />}
-      {screen === 'pin' && <PinScreen goHome={goHome} showSuccess={showSuccess} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
       {screen === 'staff' && <StaffScreen goHome={goHome} showSuccess={showSuccess} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
       {screen === 'success' && <SuccessScreen goHome={goHome} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
     </div>
@@ -1628,194 +1627,14 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
 const needsFollowUp = (nextStep) => nextStep === 'CONFIRM_DROP' || nextStep === 'RENTAL_ACCESS';
 
 // ============================================
-// PIN
-// ============================================
-function PinScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
-  const [step, setStep] = useState(1);
-  const [boxNum, setBoxNum] = useState('');
-  const [selectedBox, setSelectedBox] = useState(null);
-
-  const [pin, setPin] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [pinState, setPinState] = useState('');
-  const [msg, setMsg] = useState('');
-  const [afterOpen, setAfterOpen] = useState(null);
-
-  const pressBoxKey = (num) => {
-    if (boxNum.length >= 3) return;
-    setBoxNum(boxNum + num);
-    setMsg('');
-  };
-
-  const clearBox = () => { setBoxNum(''); setMsg(''); };
-  const backspaceBox = () => { setBoxNum(p => p.slice(0, -1)); setMsg(''); };
-
-  const submitBox = () => {
-    if (!boxNum) return;
-    if (!lockerInfo || !lockerInfo.boxes) {
-      setMsg('Đang tải thông tin tủ, vui lòng thử lại');
-      return;
-    }
-    const box = lockerInfo.boxes.find(b => b.boxNumber == boxNum);
-    if (!box) {
-      setMsg(`Không tìm thấy ô tủ số ${boxNum}`);
-      return;
-    }
-    setSelectedBox({ ...box, boxId: box.boxId ?? box.id });
-    setStep(2);
-    setMsg('');
-  };
-
-  const pressPinKey = (num) => {
-    if (pin.length >= 6) return;
-    const newPin = pin + num;
-    setPin(newPin);
-    setPinState('');
-    setMsg('');
-    if (newPin.length === 6) setTimeout(() => submitPin(newPin), 300);
-  };
-
-  const clearPin = () => { setPin(''); setPinState(''); setMsg(''); };
-  const backspacePin = () => { setPin(p => p.slice(0, -1)); setPinState(''); };
-
-  const submitPin = async (p) => {
-    const code = p || pin;
-    if (code.length !== 6) return;
-    if (!selectedBox) return;
-
-    setLoading(true);
-    try {
-      console.log('%c[PIN] Verifying PIN for box:', 'color:#fbbf24', selectedBox.boxId, code);
-      const verifyRes = await api.verifyPin(code, selectedBox.boxId);
-
-      if (verifyRes.success && verifyRes.data?.valid) {
-        const unlockRes = await api.unlockBox(activeLockerId, code, selectedBox.boxId, 'PICKUP');
-        if (unlockRes.success && unlockRes.data?.accepted && needsFollowUp(unlockRes.data?.nextStep)) {
-          setPinState('success');
-          setAfterOpen({ nextStep: unlockRes.data.nextStep, code, boxLabel: selectedBox.boxNumber });
-        } else if (unlockRes.success && unlockRes.data?.accepted) {
-          setPinState('success');
-          const oCode = verifyRes.data?.orderCode || unlockRes.data?.orderCode || '';
-          setTimeout(() => showSuccess(
-            'Đã mở khóa!',
-            unlockRes.data?.message || 'Hộp đã được mở. Vui lòng đóng cửa khi lấy đồ xong.',
-            { orderCode: oCode, boxNumber: selectedBox.boxNumber }
-          ), 500);
-        } else {
-          setPinState('error');
-          setMsg(unlockRes.data?.message || 'Lỗi mở khóa');
-          setTimeout(() => { clearPin(); }, 2000);
-        }
-      } else {
-        setPinState('error');
-        const reason = verifyRes.reasonCode || verifyRes.data?.reasonCode;
-        const serverMsg = verifyRes.data?.message || verifyRes.message;
-        if (reason === 'E_IOT_PIN_LOCKED' || serverMsg === 'E_IOT_PIN_LOCKED' || serverMsg?.includes('tạm khóa') || serverMsg?.includes('tạm khoá')) {
-          setMsg(serverMsg && serverMsg !== 'E_IOT_PIN_LOCKED'
-            ? serverMsg
-            : 'Nhập sai quá số lần cho phép! Thao tác bị tạm khóa. Vui lòng vào App Mobile để "Cấp lại mã PIN" rồi thử lại.');
-        } else {
-          setMsg(serverMsg || 'Mã PIN không hợp lệ');
-          setTimeout(() => { clearPin(); }, 2000);
-        }
-      }
-    } catch {
-      setPinState('error');
-      setMsg('Lỗi kết nối server');
-      setTimeout(() => { clearPin(); }, 2000);
-    }
-    setLoading(false);
-  };
-
-  if (afterOpen) {
-    return (
-      <AfterOpenPanel
-        nextStep={afterOpen.nextStep}
-        accessCode={afterOpen.code}
-        lockerId={activeLockerId}
-        boxLabel={afterOpen.boxLabel}
-        showSuccess={showSuccess}
-        goHome={goHome} />
-    );
-  }
-
-  if (step === 1) {
-    return (
-      <div className="screen">
-        <Header onBack={goHome} title="Lấy đồ" />
-        <p className="subtitle" style={{ textAlign: 'center' }}>
-          Nhập <strong>Số Ô Tủ</strong> của bạn
-        </p>
-        <div className="form-group" style={{ marginTop: 24, marginBottom: 32 }}>
-          <input
-            className="input"
-            value={boxNum}
-            readOnly
-            placeholder="VD: 12"
-            style={{
-              textAlign: 'center',
-              fontSize: 32,
-              letterSpacing: 4,
-              fontWeight: 700,
-              padding: '20px',
-              backgroundColor: '#f8fafc',
-              border: '2px solid var(--accent)',
-              color: 'var(--accent)'
-            }}
-          />
-        </div>
-        <div className="numpad">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => (
-            <div key={n} className="key" onClick={() => pressBoxKey(String(n))}>{n}</div>
-          ))}
-          <div className="key fn" onClick={clearBox}>Xóa</div>
-          <div className="key" onClick={() => pressBoxKey('0')}>0</div>
-          <div className="key fn" onClick={backspaceBox}><Delete size={20} /></div>
-        </div>
-        <Btn onClick={submitBox} disabled={!boxNum} style={{ marginTop: 16 }}>
-          Tiếp tục <ChevronRight size={18} />
-        </Btn>
-        {msg && <Msg type="error" text={msg} />}
-      </div>
-    );
-  }
-
-  return (
-    <div className="screen">
-      <Header onBack={() => { setStep(1); clearPin(); }} title={`Ô Tủ #${selectedBox.boxNumber}`} />
-      <p className="subtitle" style={{ textAlign: 'center' }}>
-        Nhập <strong>Mã PIN</strong> 6 số để mở tủ
-      </p>
-      <div className="pin-row">
-        {[0, 1, 2, 3, 4, 5].map(i => (
-          <div key={i} className={`pin-box ${pin.length > i ? 'filled' : ''} ${pinState}`}>
-            {pin[i] ? '●' : ''}
-          </div>
-        ))}
-      </div>
-      <div className="numpad">
-        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => (
-          <div key={n} className="key" onClick={() => pressPinKey(String(n))}>{n}</div>
-        ))}
-        <div className="key fn" onClick={clearPin}>Xóa</div>
-        <div className="key" onClick={() => pressPinKey('0')}>0</div>
-        <div className="key fn" onClick={backspacePin}><Delete size={20} /></div>
-      </div>
-      <Btn onClick={() => submitPin(pin)} loading={loading} disabled={pin.length < 6} style={{ marginTop: 16 }}>
-        <Unlock size={18} /> Mở khóa
-      </Btn>
-      {msg && <Msg type="error" text={msg} />}
-    </div>
-  );
-}
-
-// ============================================
 // STAFF
 // ============================================
 function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  // Mã chưa được kiểm tra (hệ thống bận / mất mạng), không phải mã sai: giữ mã để khách bấm 'Thử lại'.
+  const [retryable, setRetryable] = useState(false);
   const [afterOpen, setAfterOpen] = useState(null);
 
   // The backend answers with boxId; the kiosk knows the layout, so show the
@@ -1832,7 +1651,7 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
       return;
     }
 
-    setLoading(true); setMsg('');
+    setLoading(true); setMsg(''); setRetryable(false);
     try {
       console.log('%c[CODE] Unlocking with access code:', 'color:#fbbf24', accessCode);
 
@@ -1853,14 +1672,17 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
             boxNumber: res.data?.boxId ? boxNumberOf(res.data.boxId) : 'Thành công'
           }
         ), 100);
+      } else if (res.data?.reasonCode === 'ORDER_LOOKUP_UNAVAILABLE') {
+        setRetryable(true);
+        setMsg(res.data.message || 'Hệ thống đang bận, chưa kiểm tra được mã. Vui lòng thử lại.');
       } else {
         setMsg(res.data?.message || res.message || 'Mã không hợp lệ hoặc đã hết hạn');
         setTimeout(() => setCode(''), 2000);
       }
     } catch (err) {
       console.error('[CODE] Error:', err);
-      setMsg(err?.message ? `Lỗi: ${err.message}` : 'Lỗi kết nối server');
-      setTimeout(() => setCode(''), 2000);
+      setRetryable(true);
+      setMsg('Không kết nối được máy chủ, chưa kiểm tra được mã. Vui lòng thử lại.');
     }
     setLoading(false);
   };
@@ -1896,7 +1718,12 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
           onChange={e => {
             setCode(e.target.value);
             setMsg('');
+            setRetryable(false);
           }}
+          // Khách chỉ tự gõ PIN 6 số (cả mã uỷ quyền); mã QR 'LLQR…' do máy quét gõ như bàn phím thật,
+          // nên bàn phím ảo hiện dạng số cho dễ bấm trên màn 7".
+          inputMode="numeric"
+          autoComplete="off"
           placeholder="VD: 123456 hoặc LLQR..."
           style={{
             textAlign: 'center',
@@ -1912,9 +1739,11 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 
       <div style={{ maxWidth: 450, margin: '0 auto', width: '100%' }}>
         <Btn onClick={submitCode} loading={loading} disabled={code.length < 6}>
-          <Unlock size={18} /> Mở khóa
+          {retryable
+            ? <><RefreshCw size={18} /> Thử lại</>
+            : <><Unlock size={18} /> Mở khóa</>}
         </Btn>
-        {msg && <Msg type="error" text={msg} />}
+        {msg && <Msg type={retryable ? 'info' : 'error'} text={msg} />}
       </div>
     </div>
   );
