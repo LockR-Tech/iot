@@ -159,6 +159,42 @@ class TestBleGattHandle(unittest.TestCase):
         self.assertLess(len(json.dumps(reply, separators=(",", ":"))), 180)
 
 
+class TestSimulatedCabinet(unittest.TestCase):
+    """simulate_ble_cabinet.py — tủ giả để thử bằng điện thoại thật: cùng luật kiểm mã như Pi."""
+
+    def setUp(self):
+        import simulate_ble_cabinet as sim
+        self.sim = sim
+        self.key = Ed25519PrivateKey.generate()
+        self.store = PublicKeyStore("", "", env_key=raw_public(self.key))
+
+    def service(self, locker_id, boxes=24, fail=()):
+        return self.sim.SimBleGattService(
+            self.sim._SimCabinetState(locker_id), self.sim._SimHardware(boxes, fail), self.store,
+            name_fn=lambda: "LOCKR_SIM", any_locker=locker_id is None)
+
+    def test_any_locker_accepts_signed_token_of_each_locker(self):
+        service = self.service(None)
+        self.assertEqual("OK", service.handle_token(make_token(self.key, locker=3, nonce=b"\x01" * 8))["result"])
+        self.assertEqual("OK", service.handle_token(make_token(self.key, locker=9, nonce=b"\x02" * 8))["result"])
+
+    def test_still_checks_signature_and_replay(self):
+        service = self.service(None)
+        self.assertEqual("BAD_SIGNATURE",
+                         service.handle_token(make_token(Ed25519PrivateKey.generate()))["error"])
+        token = make_token(self.key)
+        self.assertEqual("OK", service.handle_token(token)["result"])
+        self.assertEqual("REPLAYED", service.handle_token(token)["error"])
+
+    def test_fixed_locker_rejects_other_locker(self):
+        self.assertEqual("WRONG_LOCKER", self.service(LOCKER).handle_token(make_token(self.key, locker=8))["error"])
+
+    def test_box_without_relay_and_forced_failure(self):
+        service = self.service(None, boxes=4, fail=[2])
+        self.assertEqual("INVALID_SLOT", service.handle_token(make_token(self.key, box=5, nonce=b"\x03" * 8))["error"])
+        self.assertEqual("HARDWARE_ERROR", service.handle_token(make_token(self.key, box=2, nonce=b"\x04" * 8))["error"])
+
+
 # Sinh 2026-10-24 bằng BleTokenSigner thật (tủ 7, ô 3, tài khoản 1234).
 JAVA_PUBLIC_KEY = "sflPhGIWa5qerzw2X7ayRZ9YD43aautnIXEL9Qjlzbw="
 JAVA_TOKEN = ("AQAAAAcAAwAAAAAAAATSat8CQLA3RBUIWi0ceu5RKezYJ747sHjMbOebCGlW_9PYxELVYY-onvu4C5etmS0U"
