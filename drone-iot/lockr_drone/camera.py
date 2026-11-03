@@ -151,9 +151,10 @@ class CameraCapture:
             # Capture từ Picamera2
             if self.mode == "picamera2" and self.picam2:
                 try:
-                    frame_rgb = self.picam2.capture_array()
+                    # "RGB888" của Picamera2 đã xếp byte theo B,G,R — đúng thứ tự OpenCV,
+                    # không cvtColor nữa (đảo kênh làm da người thành xanh tím).
+                    frame_bgr = self.picam2.capture_array()
                     if OPENCV_AVAILABLE:
-                        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
                         frame_bytes = self._process_frame_and_annotate(frame_bgr)
                     else:
                         mem = io.BytesIO()
