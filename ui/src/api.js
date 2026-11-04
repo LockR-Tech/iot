@@ -46,12 +46,6 @@ export const sendOtp           = (email)              => be('POST', '/api/auth/e
 export const verifyOtp         = (email, otp)         => be('POST', '/api/auth/email/verify-otp', { email, otp });
 export const phoneLogin        = (idToken)            => be('POST', '/api/auth/firebase', { idToken });
 export const kioskQuickRegister= (tempToken)          => be('POST', '/api/auth/kiosk/quick-register', { tempToken });
-// Đăng nhập kiosk bằng QR: khách quét bằng app rồi xác nhận, kiosk hỏi trạng thái tới khi nhận token.
-// pollToken chỉ đi trong header, không bao giờ hiện lên màn hình (chụp QR không cướp được phiên).
-const qrPollHeader = (pollToken) => ({ 'X-Kiosk-Poll-Token': pollToken });
-export const createKioskQrSession = (lockerId)               => be('POST', '/api/auth/kiosk/qr-sessions', { lockerId });
-export const pollKioskQrSession   = (sessionId, pollToken)   => be('GET', `/api/auth/kiosk/qr-sessions/${encodeURIComponent(sessionId)}`, null, null, qrPollHeader(pollToken));
-export const cancelKioskQrSession = (sessionId, pollToken)   => be('POST', `/api/auth/kiosk/qr-sessions/${encodeURIComponent(sessionId)}/cancel`, null, null, qrPollHeader(pollToken));
 
 // ─── Promotions ──────────────────────────────────────────────
 // Phản hồi: { code, valid, reason, promotion }. Gửi lockerId để mã chỉ áp dụng ở tủ khác bị từ chối,
