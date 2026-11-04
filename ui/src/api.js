@@ -68,6 +68,9 @@ export const getAllLockers     = (token)              => be('GET', '/api/lockers
 export const getLockerLayout   = (lockerId)           => be('GET', `/api/lockers/${lockerId}/layout`);
 export const getAvailableBoxes = (lockerId, token)    => be('GET', `/api/lockers/${lockerId}/boxes/available`, null, token);
 export const getAllBoxes        = (lockerId, token)    => be('GET', `/api/lockers/${lockerId}/boxes`, null, token);
+// Báo sự cố tủ / ô (cùng endpoint app mobile dùng): { title, description, boxId? }. Cần đăng nhập —
+// server ghi người báo từ JWT; khách báo thì ô chuyển PENDING_CHECK chờ KTV kiểm tra.
+export const reportLocker      = (token, lockerId, data) => be('POST', `/api/lockers/${lockerId}/report`, data, token);
 
 // ─── Orders ──────────────────────────────────────────────────
 // createRentalOrder: dùng endpoint /api/orders/rental — gateway gắn X-User-Id từ JWT
