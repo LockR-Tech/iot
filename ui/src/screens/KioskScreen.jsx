@@ -6,13 +6,16 @@ import {
   CheckCircle, KeyRound, Hash, User, CreditCard,
   Unlock, Home, Loader2, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X,
-  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical
+  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical,
+  CalendarDays, Minus, Plus
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import boxStack3d from '../assets/illustrations/box_stack_3d.png';
-import airDelivery3d from '../assets/illustrations/air_delivery_3d.png';
 import mobilePay3d from '../assets/illustrations/mobile_pay_3d.png';
 import deliveryAnimation from '../assets/illustrations/delivery_animation.json';
+// Cùng minh hoạ drone 3D với thẻ đơn giao hàng trong app mobile (AppLottieAssets.drone).
+import drone3dAnimation from '../assets/illustrations/drone_3d.json';
+import lockrLogo from '../assets/logo.png';
 import LottieAnimation from '../components/LottieAnimation';
 
 
@@ -139,13 +142,13 @@ export default function KioskScreen() {
   return (
     <div className="kiosk-wrap">
       {screen === 'home' && <HomeScreen go={go} lockerInfo={lockerInfo} activeLockerId={activeLockerId} setActiveLockerId={setActiveLockerId} allLockers={allLockers} />}
-      {screen === 'login' && <LoginScreen go={go} goHome={goHome} email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} loginMethod={loginMethod} setLoginMethod={setLoginMethod} activeLockerId={activeLockerId} setJwt={setJwt} setUserName={setUserName} />}
+      {screen === 'login' && <LoginScreen go={go} goHome={goHome} email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} loginMethod={loginMethod} setLoginMethod={setLoginMethod} />}
       {screen === 'otp' && <OtpScreen go={go} back={back} email={email} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
       {screen === 'phone-otp' && <PhoneOtpScreen go={go} back={back} phone={phone} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
       {screen === 'register' && <RegisterScreen go={go} goHome={goHome} tempToken={tempToken} setJwt={setJwt} setUserName={setUserName} />}
       {screen === 'boxes' && <BoxSelectionScreen go={go} goHome={goHome} jwt={jwt} userName={userName} selectedBox={selectedBox} setSelectedBox={setSelectedBox} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
       {screen === 'order-info' && <OrderInfoScreen go={go} back={back} jwt={jwt} selectedBox={selectedBox} setOrderId={setOrderId} setOrderPin={setOrderPin} setOrderCode={setOrderCode} setTotalPrice={setTotalPrice} activeLockerId={activeLockerId} />}
-      {screen === 'payment' && <PaymentScreen go={go} goHome={goHome} jwt={jwt} orderId={orderId} orderPin={orderPin} orderCode={orderCode} totalPrice={totalPrice} selectedBox={selectedBox} showSuccess={showSuccess} activeLockerId={activeLockerId} />}
+      {screen === 'payment' && <PaymentScreen go={go} goHome={goHome} jwt={jwt} orderId={orderId} orderPin={orderPin} orderCode={orderCode} totalPrice={totalPrice} selectedBox={selectedBox} showSuccess={showSuccess} activeLockerId={activeLockerId} pinContact={loginMethod === 'email' ? { method: 'email', value: email } : { method: 'phone', value: phone }} />}
       {screen === 'staff' && <StaffScreen goHome={goHome} showSuccess={showSuccess} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
       {screen === 'success' && <SuccessScreen goHome={goHome} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
     </div>
@@ -169,6 +172,30 @@ function Msg({ type, text }) {
   return <div className={`msg msg-${type}`}>{text}</div>;
 }
 
+// Mã mở ô của lượt thuê + lời nhắc giữ mã. Thuê bằng email: backend gửi ngay thư có đủ thông tin lượt
+// thuê lúc đơn được thanh toán (OrderService#notifyRenterOrderPaid). Thuê bằng SĐT: không có thư nên
+// nhắc khách ghi lại mã, mã vẫn xem lại được trong app.
+function PinNotice({ pin, contact, compact = false }) {
+  if (!pin) return null;
+  const byEmail = contact?.method === 'email' && contact.value;
+  return (
+    <div className={`pin-notice ${compact ? 'compact' : ''}`}>
+      <div className="pin-notice-label"><KeyRound size={14} /> Mã mở ô tủ của bạn</div>
+      <div className="pin-notice-code">{pin}</div>
+      <div className={`pin-notice-badge ${byEmail ? 'email' : 'phone'}`}>
+        {byEmail ? <Mail size={18} /> : <AlertTriangle size={18} />}
+        <span>
+          {byEmail ? (
+            <>Mã mở ô và toàn bộ thông tin thuê đã được gửi về email <strong>{contact.value}</strong>. Nếu chưa thấy, hãy kiểm tra cả mục Spam.</>
+          ) : (
+            <><strong>Lưu ý: nhớ mã này để mở lại ô tủ.</strong> Hãy ghi lại hoặc chụp màn hình — mã dùng để mở ô suốt thời gian thuê. Bạn cũng xem lại mã trong mục Đơn tủ của app Lock.R{contact?.value ? <> (đăng nhập bằng số <strong>{contact.value}</strong>)</> : null}.</>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function Btn({ children, onClick, loading, disabled, variant = 'primary', style, id }) {
   return (
     <button id={id} className={`btn btn-${variant}`} onClick={onClick} disabled={loading || disabled} style={style}>
@@ -189,7 +216,7 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
             <span className="dot green"></span> Hệ thống thông minh 24/7
           </div>
           <div className="hero-3d-visual">
-            <img src={airDelivery3d} alt="Smart Delivery" className="hero-3d-img" />
+            <img src={lockrLogo} alt="Lock.R" className="hero-logo-img" />
           </div>
           <div style={{ textAlign: 'center' }}>
             <h1 style={{ fontSize: 36, fontWeight: 900, letterSpacing: -0.5, margin: '0 0 8px 0', background: 'linear-gradient(135deg, #0f172a 0%, #2563eb 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
@@ -243,7 +270,7 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
           {/* Card 1: Mở tủ */}
           <div className="card-3d-action primary" onClick={() => go('staff')}>
             <div className="card-3d-thumb">
-              <img src={airDelivery3d} alt="Mở tủ" />
+              <LottieAnimation animationData={drone3dAnimation} className="card-3d-lottie" />
             </div>
             <div className="card-3d-body">
               <div className="card-3d-title">
@@ -283,9 +310,9 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
 
 
 // ============================================
-// LOGIN (Phone / Email OTP / Quét QR bằng app)
+// LOGIN (Phone / Email OTP)
 // ============================================
-function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod, setLoginMethod, activeLockerId, setJwt, setUserName }) {
+function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod, setLoginMethod }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
   const recaptchaReady = useRef(false);
@@ -338,13 +365,6 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
     setLoading(false);
   };
 
-  // Giống đăng nhập OTP: giữ access token + tên khách rồi sang bước chọn ô.
-  const handleQrLoggedIn = (data) => {
-    setJwt(data.accessToken);
-    setUserName(data.user?.fullName || data.user?.phoneNumber || 'Khách');
-    go('boxes');
-  };
-
   return (
     <div className="screen">
       <Header onBack={goHome} title="Nhập thông tin" />
@@ -355,14 +375,9 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
         <div className={`login-tab ${loginMethod === 'email' ? 'active' : ''}`} onClick={() => { setLoginMethod('email'); setMsg(''); }}>
           <Mail size={16} /> Email
         </div>
-        <div className={`login-tab ${loginMethod === 'qr' ? 'active' : ''}`} onClick={() => { setLoginMethod('qr'); setMsg(''); }}>
-          <QrCode size={16} /> Quét QR bằng app
-        </div>
       </div>
 
-      {loginMethod === 'qr' ? (
-        <QrLoginPanel lockerId={activeLockerId} onLoggedIn={handleQrLoggedIn} />
-      ) : loginMethod === 'phone' ? (
+      {loginMethod === 'phone' ? (
         <>
           <p className="subtitle">Nhập số điện thoại để nhận mã OTP xác thực</p>
           <div className="form-group">
@@ -385,156 +400,6 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
         </>
       )}
       {msg && <Msg type="error" text={msg} />}
-    </div>
-  );
-}
-
-// ============================================
-// QR LOGIN (khách quét bằng app Lock.R)
-// ============================================
-// Kiosk tạo phiên → hiện QR (chỉ chứa mã phiên + mã xác nhận, đều công khai) → khách quét bằng app và
-// xác nhận → kiosk hỏi trạng thái bằng pollToken tới khi nhận token (server trả đúng một lần) rồi đi tiếp
-// như đăng nhập OTP. pollToken chỉ nằm trong biến của effect: không vào state, không hiện, không log.
-const QR_DEFAULT_TTL_MS = 120000;           // hợp đồng: phiên sống 120 s
-const QR_MAX_TTL_MS = 10 * 60 * 1000;
-const QR_EXPIRY_GRACE_MS = 5000;            // quá hạn mà chưa nghe server báo EXPIRED (mất mạng) thì tự dừng
-
-function QrLoginPanel({ lockerId, onLoggedIn }) {
-  const [attempt, setAttempt] = useState(0);         // "Tạo mã mới" tăng số này để tạo phiên khác
-  const [phase, setPhase] = useState('creating');    // creating | pending | ended
-  const [qr, setQr] = useState(null);                // { content, sessionId, code, deadline } — phần công khai
-  const [msg, setMsg] = useState('');
-  const [now, setNow] = useState(() => Date.now());
-  const onLoggedInRef = useRef(onLoggedIn);
-
-  useEffect(() => { onLoggedInRef.current = onLoggedIn; }, [onLoggedIn]);
-
-  useEffect(() => {
-    let alive = true;
-    let timer = null;
-    let session = null;     // { sessionId, pollToken } của phiên đang chờ; null = không còn gì để huỷ
-
-    const end = (text) => {
-      session = null;
-      setPhase('ended');
-      setMsg(text);
-    };
-
-    // Hỏi tuần tự (xong lượt này mới hẹn lượt sau) để không có hai lượt cùng lúc tranh nhau token một lần.
-    const poll = async (pollMs, deadline) => {
-      let res = null;
-      try {
-        res = await api.pollKioskQrSession(session.sessionId, session.pollToken);
-      } catch { /* mạng chập chờn: hỏi lại lượt sau */ }
-      if (!alive || !session) return;
-      const d = res?.data;
-      const status = res?.success ? d?.status : (res?.code === 'KIOSK_QR_INVALID' ? 'INVALID' : null);
-      if (status === 'CONFIRMED' && d.accessToken) {
-        session = null;                     // đã nhận token — rời màn không huỷ phiên nữa
-        onLoggedInRef.current(d);
-        return;
-      }
-      if (status === 'EXPIRED' || status === 'INVALID') { end('Mã QR đã hết hạn.'); return; }
-      if (status === 'CANCELLED') { end('Phiên đăng nhập đã bị huỷ.'); return; }
-      if (status === 'CONSUMED' || status === 'CONFIRMED') { end('Phiên này đã được sử dụng.'); return; }
-      if (Date.now() > deadline + QR_EXPIRY_GRACE_MS) {
-        api.cancelKioskQrSession(session.sessionId, session.pollToken).catch(() => {});
-        end(res ? 'Mã QR đã hết hạn.' : 'Mất kết nối server, mã QR đã hết hạn.');
-        return;
-      }
-      timer = setTimeout(() => poll(pollMs, deadline), pollMs);
-    };
-
-    (async () => {
-      let res = null;
-      try { res = await api.createKioskQrSession(lockerId); } catch { /* báo lỗi bên dưới */ }
-      const d = res?.success ? res.data : null;
-      if (!alive) {
-        // Khách đã rời màn trong lúc chờ tạo phiên: huỷ luôn phiên vừa tạo
-        if (d?.sessionId && d?.pollToken) api.cancelKioskQrSession(d.sessionId, d.pollToken).catch(() => {});
-        return;
-      }
-      if (!d?.sessionId || !d?.pollToken || !d?.qrContent) {
-        setPhase('ended');
-        setMsg(!res ? 'Lỗi kết nối server'
-          : res.code === 'KIOSK_QR_RATE_LIMITED' ? 'Tạo mã quá nhiều lần. Vui lòng thử lại sau ít phút.'
-            : (res.message || 'Không tạo được mã QR'));
-        return;
-      }
-      // Đếm ngược theo đồng hồ kiosk; đồng hồ lệch xa (thời hạn vô lý) thì dùng thời hạn mặc định.
-      let ttl = Date.parse(d.expiresAt) - Date.now();
-      if (!Number.isFinite(ttl) || ttl <= 0 || ttl > QR_MAX_TTL_MS) ttl = QR_DEFAULT_TTL_MS;
-      const deadline = Date.now() + ttl;
-      const pollMs = Math.max(1000, Number(d.pollIntervalMs) || 2000);
-      session = { sessionId: d.sessionId, pollToken: d.pollToken };
-      setQr({ content: d.qrContent, sessionId: d.sessionId, code: d.confirmCode, deadline });
-      setNow(Date.now());
-      setPhase('pending');
-      timer = setTimeout(() => poll(pollMs, deadline), pollMs);
-    })();
-
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-      // Rời bước này (quay lại, đổi tab, về trang chủ) khi phiên còn chờ: huỷ để mã không dùng được nữa
-      if (session) api.cancelKioskQrSession(session.sessionId, session.pollToken).catch(() => {});
-    };
-  }, [lockerId, attempt]);
-
-  useEffect(() => {
-    if (phase !== 'pending') return undefined;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [phase]);
-
-  const retry = () => {
-    setPhase('creating'); setMsg(''); setQr(null);
-    setAttempt(a => a + 1);
-  };
-
-  const left = qr ? Math.max(0, Math.ceil((qr.deadline - now) / 1000)) : 0;
-  const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-
-  return (
-    <div className="qr-login">
-      <div className={`qr-login-code ${phase === 'pending' && qr ? '' : 'idle'}`}>
-        {phase === 'pending' && qr ? (
-          <QRCodeSVG value={qr.content} size={200} level="M" marginSize={2} />
-        ) : phase === 'creating' ? (
-          <><Loader2 size={32} style={{ animation: 'spin 0.6s linear infinite' }} /><span>Đang tạo mã...</span></>
-        ) : (
-          <><QrCode size={48} /><span>Mã không còn hiệu lực</span></>
-        )}
-      </div>
-
-      <div className="qr-login-info">
-        <h3>Đăng nhập nhanh bằng app Lock.R</h3>
-        <ol className="qr-login-steps">
-          <li>Mở app Lock.R trên điện thoại và chọn <strong>quét mã QR</strong></li>
-          <li>Quét mã bên cạnh rồi bấm <strong>xác nhận đăng nhập kiosk</strong></li>
-          <li>Kiosk tự chuyển sang bước chọn ô tủ</li>
-        </ol>
-
-        {phase === 'pending' && qr && (
-          <>
-            <div className={`qr-login-timer ${left <= 20 ? 'warn' : ''}`}>
-              <Clock size={16} /> Mã hết hạn sau <strong>{mmss}</strong>
-            </div>
-            <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đang chờ xác nhận trên điện thoại...</p>
-            <div className="qr-login-manual">
-              Không quét được? Nhập tay trong app: mã phiên <code>{qr.sessionId}</code>
-              {qr.code && <> · mã xác nhận <code>{qr.code}</code></>}
-            </div>
-          </>
-        )}
-
-        {phase === 'ended' && (
-          <>
-            <Msg type="error" text={msg} />
-            <Btn onClick={retry}><RefreshCw size={18} /> Tạo mã mới</Btn>
-          </>
-        )}
-      </div>
     </div>
   );
 }
@@ -710,6 +575,7 @@ function boxPlacement(boxes) {
   const taken = new Set();
   const place = new Map();
   let cols = 0;
+  let rows = 0;
   for (const b of boxes) {
     const row = b.rowIndex - minRow + 1;
     const col = b.colIndex - minCol + 1;
@@ -720,8 +586,9 @@ function boxPlacement(boxes) {
     }
     place.set(b.boxId, { gridColumn: col, gridRow: `${row} / span ${span}` });
     cols = Math.max(cols, col);
+    rows = Math.max(rows, row + span - 1);
   }
-  return { cols, place };
+  return { cols, rows, place };
 }
 
 function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelectedBox, lockerInfo, activeLockerId }) {
@@ -864,66 +731,91 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
 
   // Tính số ô trống hiện tại để hiển thị
   // Ô DRONE chỉ nhận hàng drone thả (backend: DRONE_CELL_RESTRICTED) nên không tính là ô trống để thuê.
-  const availableCount = boxes.filter(b => b.status === 'AVAILABLE' && b.cellType !== 'DRONE').length;
+  const availableCount = displayBoxes.filter(b => b.status === 'AVAILABLE' && b.cellType !== 'DRONE' && b.type !== 'DRONE').length;
   const layout = boxPlacement(displayBoxes);
+  // Không có toạ độ thật thì xếp theo số ô cho dễ tìm.
+  const orderedBoxes = layout ? displayBoxes : [...displayBoxes].sort((a, b) => (a.boxNumber ?? 0) - (b.boxNumber ?? 0));
+  const selectedKind = selectedBox && (['LUGGAGE', 'XL'].includes(selectedBox.cellType) ? 'Ô lớn (XL)' : 'Ô tiêu chuẩn');
 
   return (
-    <div className={`screen ${layout ? 'screen-boxes' : ''}`}>
+    <div className="screen screen-boxes">
       <Header onBack={goHome} title="Chọn ô tủ" />
-      {userName && <div className="user-info"><User size={16} /> {userName}</div>}
-      {lockerInfo && (
-        <div className="locker-info-card">
-          <div className="locker-name">
-            <MapPin size={16} color="var(--accent)" />
-            {lockerInfo.storeName || lockerInfo.name}
-          </div>
-          <div className="locker-address">
-            {lockerInfo.address} • Tủ: {lockerInfo.code}
-          </div>
-          {lockerInfo.totalBoxes != null && (
-            <div className="locker-stats">
-              <span className="stat-available">
-                <CheckCircle size={14} style={{ marginRight: 4, verticalAlign: -2 }} />
-                {availableCount} ô trống
-              </span>
-              <span className="stat-total">/ {lockerInfo.totalBoxes} ô</span>
+      <div className="boxes-layout">
+        <aside className="boxes-side">
+          {userName && (
+            <div className="user-chip"><User size={15} /><span>{userName}</span></div>
+          )}
+
+          {lockerInfo && (
+            <div className="boxes-locker">
+              <div className="boxes-locker-name">
+                <MapPin size={16} color="var(--accent)" />
+                <span>{lockerInfo.storeName || lockerInfo.name}</span>
+              </div>
+              {lockerInfo.address && <div className="boxes-locker-address">{lockerInfo.address}</div>}
+              <div className="boxes-locker-meta">
+                {lockerInfo.code && <span className="boxes-chip">{lockerInfo.code}</span>}
+                <span className="boxes-chip green"><CheckCircle size={13} /> {availableCount} ô trống</span>
+                {displayBoxes.length > 0 && <span className="boxes-chip muted">{displayBoxes.length} ô</span>}
+              </div>
             </div>
           )}
-        </div>
-      )}
-      {!lockerInfo && (
-        <p className="subtitle">Chọn 1 ô tủ trống để gửi đồ</p>
-      )}
 
-      {loading && <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 24 }}><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite', verticalAlign: -4, marginRight: 8 }} />Đang tải...</p>}
-      {msg && !loading && <Msg type="error" text={msg} />}
+          <div className="box-legend">
+            <span><i className="lg available" />Trống</span>
+            <span><i className="lg selected" />Đang chọn</span>
+            <span><i className="lg rented" />Đang dùng</span>
+            <span><i className="lg drone" />Drone</span>
+            <span><i className="lg offline" />Lỗi / bảo trì</span>
+          </div>
 
-      <div className={`box-grid ${layout ? 'by-layout' : ''}`} style={layout ? { '--cols': layout.cols } : undefined}>
-        {displayBoxes.map(box => {
+          <div className={`box-picked ${selectedBox ? 'on' : ''}`}>
+            {selectedBox
+              ? <><Package size={18} /><span>Đã chọn <strong>Ô {selectedBox.boxNumber}</strong> · {selectedKind}</span></>
+              : <span>Chạm vào một ô <strong>Trống</strong> bên cạnh để chọn</span>}
+          </div>
+
+          <Btn onClick={() => go('order-info')} disabled={!selectedBox}>
+            Tiếp tục đặt tủ <ChevronRight size={18} />
+          </Btn>
+        </aside>
+
+        <section className="boxes-main">
+          {loading && displayBoxes.length === 0 && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />Đang tải...</p>}
+          {msg && !loading && <Msg type="error" text={msg} />}
+
+          <div className={`box-grid ${layout ? 'by-layout' : 'auto'}`} style={layout ? { '--cols': layout.cols, '--rows': layout.rows } : undefined}>
+        {orderedBoxes.map(box => {
           const myOrder = myOrders.find(o =>
             isActiveManageableOrder(o)
             && (o.sendBoxId === box.boxId || o.receiveBoxId === box.boxId)
           );
           
-          let statusText = 'Trống';
-          let boxClass = 'available';
+          const status = String(box.status || '').toUpperCase();
           const isDrone = box.cellType === 'DRONE' || box.type === 'DRONE';
-          const isAvail = box.status === 'AVAILABLE' && !isDrone;
-          
+          const isAvail = status === 'AVAILABLE' && !isDrone;
+          // Chỉ AVAILABLE mới là "Trống". Trạng thái lạ (vd OUT_OF_SERVICE) trước đây rơi về "Trống"
+          // nên ô trông như chọn được mà bấm không ăn.
+          let statusText = 'Không dùng được';
+          let boxClass = 'offline';
+
           if (myOrder) {
             statusText = 'Ô của bạn';
             boxClass = 'yours';
           } else if (isDrone) {
             statusText = 'Drone';
             boxClass = 'drone';
-          } else {
-            const isRented = box.status === 'RENTED' || box.status === 'OCCUPIED' || box.status === 'STORING';
-            const isBooked = box.status === 'BOOKED' || box.status === 'RESERVED';
-            const isOffline = box.status === 'OFFLINE' || box.status === 'MAINTENANCE' || box.status === 'FAULT';
-            
-            if (isRented) { statusText = 'Đang dùng'; boxClass = 'rented'; }
-            else if (isBooked) { statusText = 'Đã đặt'; boxClass = 'booked'; }
-            else if (isOffline) { statusText = 'Lỗi'; boxClass = 'offline'; }
+          } else if (isAvail) {
+            statusText = 'Trống';
+            boxClass = 'available';
+          } else if (['RENTED', 'OCCUPIED', 'STORING'].includes(status)) {
+            statusText = 'Đang dùng'; boxClass = 'rented';
+          } else if (['BOOKED', 'RESERVED'].includes(status)) {
+            statusText = 'Đã đặt'; boxClass = 'booked';
+          } else if (status === 'FAULT') {
+            statusText = 'Lỗi';
+          } else if (['OUT_OF_SERVICE', 'MAINTENANCE', 'OFFLINE'].includes(status)) {
+            statusText = 'Bảo trì';
           }
 
           const sel = selectedBox?.boxId === box.boxId;
@@ -942,11 +834,9 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
             </button>
           );
         })}
+          </div>
+        </section>
       </div>
-
-      <Btn onClick={() => go('order-info')} disabled={!selectedBox}>
-        Tiếp tục <ChevronRight size={18} /> Đặt tủ
-      </Btn>
 
       {/* MANAGE BOX MODAL */}
       {manageBox && (
@@ -981,7 +871,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
 // ============================================
 function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, setOrderCode, setTotalPrice, activeLockerId }) {
   const [note, setNote] = useState('');
-  const [hours, setHours] = useState(1);
+  const [hours, setHours] = useState(4);
 
   // Promo states
   const [promoCode, setPromoCode] = useState('');
@@ -997,7 +887,11 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
   // Giá thuê và số giờ gợi ý do admin cấu hình (scope order, công khai). Chỉ để hiển thị:
   // backend luôn tự tính tiền. API lỗi ⇒ giữ mặc định của catalog.
   const [rates, setRates] = useState({ standard: 5000, xl: 10000, standardDaily: 40000, xlDaily: 80000 });
-  const [hoursOptions, setHoursOptions] = useState([1, 2, 3, 4, 6, 8, 12, 24]);
+  const [hoursOptions, setHoursOptions] = useState([2, 4, 8, 12, 24]);
+  // Giới hạn giờ thuê admin cho — mặc định giống app mobile (BusinessConfig): 1–72 giờ.
+  const [limits, setLimits] = useState({ min: 1, max: 72 });
+  // Chọn theo ngày (giờ luôn là bội của 24) như app mobile, hay theo giờ (dưới 1 ngày).
+  const [byDay, setByDay] = useState(false);
   useEffect(() => {
     let alive = true;
     api.getPublicSettings('order').then(res => {
@@ -1014,16 +908,40 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
         standardDaily: daily('app.order.rental-daily-rate-standard', r.standardDaily),
         xlDaily: daily('app.order.rental-daily-rate-xl', r.xlDaily),
       }));
+      const int = (key, fallback) => {
+        const v = Number(s[key]);
+        return Number.isInteger(v) && v >= 1 ? v : fallback;
+      };
+      let min = int('app.order.rental-min-hours', 1);
+      let max = int('app.order.rental-max-hours', 72);
+      if (min > max) { min = 1; max = 72; }
+      setLimits({ min, max });
       const raw = s['app.order.rental-quick-hours'];
       const quick = (Array.isArray(raw) ? raw : String(raw ?? '').split(','))
-        .map(Number).filter(h => Number.isInteger(h) && h > 0);
-      if (quick.length) {
-        setHoursOptions(quick);
-        setHours(h => (quick.includes(h) ? h : quick[0]));
-      }
+        .map(Number).filter(h => Number.isInteger(h) && h >= min && h <= max);
+      if (quick.length) setHoursOptions(quick);
+      // Mở màn ở chế độ theo giờ ⇒ số giờ mặc định kẹp dưới 1 ngày như mobile.
+      const hourModeMax = max >= 24 ? Math.max(min, 23) : max;
+      setByDay(false);
+      setHours(Math.min(Math.max(int('app.order.rental-default-hours', 4), min), hourModeMax));
     }).catch(() => { /* giữ mặc định */ });
     return () => { alive = false; };
   }, []);
+
+  // Cùng quy tắc với rent_locker_page.dart: theo giờ chỉ tới 23 giờ (khi được thuê ≥ 1 ngày),
+  // theo ngày từ 1 tới số ngày tối đa = max giờ / 24.
+  const maxDays = Math.floor(limits.max / 24);
+  const maxHourMode = maxDays >= 1 ? Math.max(limits.min, 23) : limits.max;
+  const hourQuick = hoursOptions.filter(h => h >= limits.min && h <= maxHourMode);
+  const dayQuick = [1, 2, 3, 7].filter(d => d <= maxDays);
+  const days = Math.max(1, Math.ceil(hours / 24));
+  const clampHourMode = (h) => Math.min(Math.max(h, limits.min), maxHourMode);
+  const setDays = (d) => setHours(Math.min(Math.max(d, 1), maxDays) * 24);
+  const switchMode = (toDay) => {
+    if (toDay === byDay) return;
+    setByDay(toDay);
+    setHours(toDay ? 24 : clampHourMode(hourQuick[0] ?? limits.min));
+  };
 
   const isXl = selectedBox?.cellType === 'XL';
   const HOURLY_RATE = isXl ? rates.xl : rates.standard;
@@ -1109,89 +1027,125 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
   };
 
   const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
+  // Giá từng mức giờ, cùng công thức với `subtotal` ở trên — để khách so sánh ngay trên nút.
+  const priceFor = (h) => (DAILY_RATE > 0
+    ? Math.floor(h / 24) * DAILY_RATE + Math.min((h % 24) * HOURLY_RATE, DAILY_RATE)
+    : h * HOURLY_RATE);
+  const clearPromo = () => { setPromoCode(''); setPromoApplied(false); setPromoError(''); setPromoDiscount(0); setPromoDetail(null); };
 
   return (
-    <div className="screen">
+    <div className="screen screen-order">
       <Header onBack={back} title="Thông tin đặt tủ" />
+      <div className="order-layout">
+        <section className="order-form">
+          {/* Số giờ thuê */}
+          <div className="order-block">
+            <div className="order-block-head">
+              <div className="order-block-title"><Clock size={16} /> Thời gian thuê</div>
+              {maxDays >= 1 && (
+                <div className="mode-toggle" role="tablist">
+                  <button className={!byDay ? 'active' : ''} onClick={() => switchMode(false)}><Clock size={15} /> Theo giờ</button>
+                  <button className={byDay ? 'active' : ''} onClick={() => switchMode(true)}><CalendarDays size={15} /> Theo ngày</button>
+                </div>
+              )}
+            </div>
 
-      {/* Số giờ thuê */}
-      <div className="form-group">
-        <label style={{ fontWeight: 600, marginBottom: 8, display: 'block' }}>Thời gian thuê tủ</label>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {hoursOptions.map(h => (
-            <button
-              key={h}
-              onClick={() => setHours(h)}
-              style={{
-                padding: '10px 18px',
-                borderRadius: 12,
-                border: `2px solid ${hours === h ? 'var(--accent)' : 'var(--border)'}`,
-                backgroundColor: hours === h ? 'var(--accent)' : 'transparent',
-                color: hours === h ? '#fff' : 'var(--text-primary)',
-                fontWeight: hours === h ? 700 : 400,
-                cursor: 'pointer',
-                fontSize: 14,
-                transition: 'all 0.15s',
-              }}
-            >
-              {h}h
-            </button>
-          ))}
-        </div>
-        <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
-          Giá: {fmt(HOURLY_RATE)}/giờ{DAILY_RATE > 0 && <> · {fmt(DAILY_RATE)}/ngày</>} — Tổng {hours} giờ = <strong style={{ color: 'var(--accent)' }}>{fmt(subtotal)}</strong>
-        </div>
-      </div>
+            <div className="hour-options">
+              {(byDay ? dayQuick.map(d => d * 24) : hourQuick).map(h => (
+                <button key={h} className={`hour-option ${hours === h ? 'active' : ''}`} onClick={() => setHours(h)}>
+                  <span className="hour-option-h">{byDay ? `${h / 24} ngày` : `${h} giờ`}</span>
+                  <span className="hour-option-p">{fmt(priceFor(h))}</span>
+                </button>
+              ))}
+            </div>
 
-      {/* Ghi chú */}
-      <div className="form-group">
-        <label>Ghi chú (tùy chọn)</label>
-        <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Quần áo, cần giữ cẩn thận..." />
-      </div>
-
-      {/* Mã giảm giá */}
-      <div className="divider" style={{ marginTop: 20 }}>Mã giảm giá/Ưu đãi</div>
-      <div className="form-group">
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input className="input" value={promoCode} onChange={e => {
-            setPromoCode(e.target.value.toUpperCase());
-            if (promoApplied || promoError) { setPromoApplied(false); setPromoError(''); setPromoDiscount(0); setPromoDetail(null); }
-          }} placeholder="Nhập mã khuyến mãi" style={{ flex: 1, textTransform: 'uppercase' }} disabled={promoApplied || promoLoading} />
-          {!promoApplied ? (
-            <button className="btn btn-primary" onClick={handleApplyPromo} disabled={!promoCode.trim() || promoLoading} style={{ width: 'auto', padding: '0 20px', borderRadius: 12 }}>
-              {promoLoading ? <Loader2 size={18} className="spinner" /> : 'Áp dụng'}
-            </button>
-          ) : (
-            <button className="btn btn-secondary" onClick={() => { setPromoCode(''); setPromoApplied(false); setPromoDiscount(0); setPromoDetail(null); }} style={{ width: 'auto', padding: '0 20px', borderRadius: 12, backgroundColor: '#f1f5f9', color: '#64748b' }}>
-              <X size={18} /> Gỡ bỏ
-            </button>
-          )}
-        </div>
-        {promoError && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 8, display: 'flex', alignItems: 'center', gap: 4 }}><Circle size={12} fill="#ef4444" color="#ef4444" /> {promoError}</div>}
-        {promoApplied && promoDetail && (
-          <div style={{ marginTop: 12, padding: 12, backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12 }}>
-            <div style={{ color: '#166534', fontWeight: 600, fontSize: 14 }}>{promoDetail.title || promoDetail.name}</div>
-            {promoBelowMin
-              ? <div style={{ color: '#b45309', fontSize: 13, marginTop: 4 }}>Cần đơn tối thiểu {fmt(promoMinOrder)} để dùng mã này — tăng số giờ thuê hoặc gỡ mã.</div>
-              : <div style={{ color: '#22c55e', fontSize: 13, marginTop: 4 }}>Đã giảm: {fmt(promoDiscount)}</div>}
+            <div className="duration-stepper">
+              <button
+                onClick={() => (byDay ? setDays(days - 1) : setHours(clampHourMode(hours - 1)))}
+                disabled={byDay ? days <= 1 : hours <= limits.min}
+                aria-label={byDay ? 'Bớt 1 ngày' : 'Bớt 1 giờ'}><Minus size={20} /></button>
+              <div className="duration-stepper-value">
+                <strong>{byDay ? `${days} ngày` : `${hours} giờ`}</strong>
+                {byDay && <span>{days * 24} giờ</span>}
+              </div>
+              <button
+                onClick={() => (byDay ? setDays(days + 1) : setHours(clampHourMode(hours + 1)))}
+                disabled={byDay ? days >= maxDays : hours >= maxHourMode}
+                aria-label={byDay ? 'Thêm 1 ngày' : 'Thêm 1 giờ'}><Plus size={20} /></button>
+            </div>
+            <div className="order-rate">
+              Đơn giá {fmt(HOURLY_RATE)}/giờ{DAILY_RATE > 0 && <> · tối đa {fmt(DAILY_RATE)}/ngày</>}
+            </div>
           </div>
-        )}
-      </div>
 
-      {/* Tổng tiền */}
-      <div className="order-sum" style={{ marginTop: 24 }}>
-        <div className="order-row"><span style={{ color: 'var(--text-secondary)' }}>Thuê tủ {hours} giờ:</span> <strong>{fmt(subtotal)}</strong></div>
-        {promoApplied && promoDiscount > 0 && (
-          <div className="order-row"><span style={{ color: '#22c55e' }}>Khuyến mãi:</span> <strong style={{ color: '#ef4444' }}>-{fmt(promoDiscount)}</strong></div>
-        )}
-        <div className="order-row" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>Tổng cộng:</span>
-          <strong style={{ fontSize: 20, color: 'var(--accent)' }}>{fmt(total)}</strong>
-        </div>
-      </div>
+          {/* Ghi chú */}
+          <div className="order-block">
+            <div className="order-block-title"><ClipboardList size={16} /> Ghi chú <span className="order-optional">tuỳ chọn</span></div>
+            <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Quần áo, cần giữ cẩn thận..." />
+          </div>
 
-      <Btn onClick={handleCreate} loading={loading} style={{ marginTop: 24 }}><ClipboardList size={18} /> Đặt tủ ngay</Btn>
-      {msg && <Msg type="error" text={msg} />}
+          {/* Mã giảm giá */}
+          <div className="order-block">
+            <div className="order-block-title"><CreditCard size={16} /> Mã giảm giá <span className="order-optional">tuỳ chọn</span></div>
+            <div className="promo-row">
+              <input className="input" value={promoCode} onChange={e => {
+                setPromoCode(e.target.value.toUpperCase());
+                if (promoApplied || promoError) { setPromoApplied(false); setPromoError(''); setPromoDiscount(0); setPromoDetail(null); }
+              }} placeholder="Nhập mã khuyến mãi" style={{ textTransform: 'uppercase' }} disabled={promoApplied || promoLoading} />
+              {!promoApplied ? (
+                <button className="btn btn-primary promo-btn" onClick={handleApplyPromo} disabled={!promoCode.trim() || promoLoading}>
+                  {promoLoading ? <Loader2 size={18} style={{ animation: 'spin 0.6s linear infinite' }} /> : 'Áp dụng'}
+                </button>
+              ) : (
+                <button className="btn btn-secondary promo-btn" onClick={clearPromo}>
+                  <X size={18} /> Gỡ mã
+                </button>
+              )}
+            </div>
+            {promoError && <div className="promo-msg error"><AlertTriangle size={14} /> {promoError}</div>}
+            {promoApplied && promoDetail && (
+              <div className={`promo-msg ${promoBelowMin ? 'warn' : 'ok'}`}>
+                <CheckCircle size={14} />
+                <span>
+                  <strong>{promoDetail.title || promoDetail.name}</strong>
+                  {promoBelowMin
+                    ? <> — cần đơn tối thiểu {fmt(promoMinOrder)}, hãy tăng số giờ thuê hoặc gỡ mã.</>
+                    : <> — đã giảm {fmt(promoDiscount)}</>}
+                </span>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <aside className="order-summary">
+          <div className="order-summary-title">Tóm tắt đơn thuê</div>
+          {selectedBox && (
+            <div className="order-summary-box">
+              <div className="order-summary-box-icon">
+                {isXl ? <Luggage size={22} /> : <Package size={22} />}
+              </div>
+              <div>
+                <div className="order-summary-box-no">Ô {selectedBox.boxNumber}</div>
+                <div className="order-summary-box-kind">{isXl ? 'Ô lớn (XL)' : 'Ô tiêu chuẩn'}</div>
+              </div>
+            </div>
+          )}
+          <div className="order-summary-rows">
+            <div><span>Thời gian thuê</span><strong>{byDay ? `${days} ngày (${hours} giờ)` : `${hours} giờ`}</strong></div>
+            <div><span>Tiền thuê</span><strong>{fmt(subtotal)}</strong></div>
+            {promoApplied && promoDiscount > 0 && (
+              <div className="discount"><span>Khuyến mãi</span><strong>-{fmt(promoDiscount)}</strong></div>
+            )}
+          </div>
+          <div className="order-summary-total">
+            <span>Tổng cộng</span>
+            <strong>{fmt(total)}</strong>
+          </div>
+          <p className="order-summary-note">Giờ thuê bắt đầu tính khi bạn xác nhận đã cất đồ vào ô.</p>
+          <Btn onClick={handleCreate} loading={loading}><ShieldCheck size={18} /> Đặt tủ ngay</Btn>
+          {msg && <Msg type="error" text={msg} />}
+        </aside>
+      </div>
     </div>
   );
 }
@@ -1214,7 +1168,7 @@ const payErrorText = (res, fallback) => PAY_ERROR_TEXT[res?.code] || res?.messag
 const SEPAY_POLL_MS = 3000;               // hỏi trạng thái đơn mỗi 3 s
 const SEPAY_WAIT_MS = 10 * 60 * 1000;     // chờ chuyển khoản tối đa 10 phút (bấm "Kiểm tra lại" để chờ tiếp)
 
-function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPrice, selectedBox, showSuccess, activeLockerId }) {
+function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPrice, selectedBox, showSuccess, activeLockerId, pinContact }) {
   const [loading, setLoading] = useState('');
   const [msg, setMsg] = useState('');
   const [sepay, setSepay] = useState(null);                // giao dịch VietQR đang chờ: { paymentId, referenceId, amount, qrImage, qrText, payLink }
@@ -1416,7 +1370,9 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
         boxLabel={boxNo}
         showSuccess={showSuccess}
         goHome={goHome}
-        dropDoneMessage={`Đã bắt đầu thuê. Dùng mã PIN ${orderPin} để mở lại ô trong thời gian thuê.`} />
+        pinNotice={<PinNotice pin={orderPin} contact={pinContact} compact />}
+        successExtra={{ orderCode, orderPin, pinContact }}
+        dropDoneMessage="Đã bắt đầu thuê. Dùng mã bên dưới để mở lại ô trong thời gian thuê." />
     );
   }
 
@@ -1426,6 +1382,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
         <Header onBack={goHome} title="Thanh toán" />
         <div style={{ maxWidth: 450, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Msg type="success" text={`Đã nhận thanh toán cho đơn ${orderCode || `#${orderId}`}.`} />
+          <PinNotice pin={orderPin} contact={pinContact} />
           {loading === 'open' ? (
             <p className="polling-status" style={{ justifyContent: 'center', fontSize: 14 }}>
               <Loader2 size={16} style={{ animation: 'spin 0.6s linear infinite' }} />Đang mở ô tủ #{boxNo}...
@@ -1562,16 +1519,16 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 // Backend trả `nextStep` khi mở ô: CONFIRM_DROP (vừa mở để bỏ hàng — hỏi đã bỏ xong chưa),
 // RENTAL_ACCESS (ô đang thuê — dùng tiếp hay kết thúc thuê). Hai thao tác này chỉ dùng mã,
 // backend chấp nhận vì ô của đơn vừa được mở thành công.
-function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess, goHome, dropDoneMessage }) {
+function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess, goHome, dropDoneMessage, pinNotice, successExtra }) {
   const [loading, setLoading] = useState('');
   const [msg, setMsg] = useState('');
 
-  const run = async (key, action, title, message) => {
+  const run = async (key, action, title, message, extra = null) => {
     setLoading(key); setMsg('');
     try {
       const res = await action(lockerId, accessCode);
       if (res.success && res.data?.accepted) {
-        showSuccess(title, message || res.data.message, { boxNumber: boxLabel });
+        showSuccess(title, message || res.data.message, { boxNumber: boxLabel, ...extra });
       } else {
         setMsg(res.data?.message || res.message || 'Không thực hiện được, vui lòng thử lại');
       }
@@ -1591,7 +1548,8 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
           Ô đã mở. Đặt đồ vào ô, <strong>đóng cửa</strong> rồi bấm xác nhận.
         </p>
         <div style={panel}>
-          <Btn onClick={() => run('drop', api.confirmDropWithCode, 'Đã bỏ hàng!', dropDoneMessage)} loading={loading === 'drop'}>
+          {pinNotice}
+          <Btn onClick={() => run('drop', api.confirmDropWithCode, 'Đã bỏ hàng!', dropDoneMessage, successExtra)} loading={loading === 'drop'}>
             <CheckCircle size={18} /> Đã bỏ hàng xong
           </Btn>
           <Btn variant="secondary" onClick={goHome} disabled={!!loading}>
@@ -1780,7 +1738,10 @@ function SuccessScreen({ goHome, title, msg, extra, countdown }) {
               <strong style={{ fontSize: 24, color: 'var(--success)', fontWeight: 900 }}>Ô #{extra.boxNumber}</strong>
             </div>
           )}
-          {extra.orderPin && (
+          {extra.orderPin && extra.pinContact && (
+            <PinNotice pin={extra.orderPin} contact={extra.pinContact} compact />
+          )}
+          {extra.orderPin && !extra.pinContact && (
             <div className="extra-row" style={{ justifyContent: 'space-between', flexDirection: 'column', gap: 6, paddingTop: 6 }}>
               <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Mã PIN để mở lại tủ khi nhận đồ:</span>
               <div style={{ 
