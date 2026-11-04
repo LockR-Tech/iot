@@ -262,6 +262,58 @@ class DeliveryTrackerTest(unittest.TestCase):
         self.tracker.observe([23])
         self.assertIsNotNone(self.tracker.due_target_request())
 
+    # ─── chế độ thử nắp (admin bật): mục tiêu không gắn đơn ───
+
+    LID_TEST_TARGET = {"eventType": "DELIVERY_TARGET", "lockerId": 7, "compartmentId": 39,
+                       "arucoMarkerId": 0, "arucoDictionary": "DICT_4X4_50", "mode": "LID_TEST"}
+
+    def test_target_request_tells_the_system_which_markers_are_in_view(self):
+        self.tracker.observe([(0, (0.0, 0.0, 0.4)), 1])
+        request = self.tracker.due_target_request()
+        self.assertEqual(request["visibleMarkers"], [0, 1])
+
+    def test_lid_test_target_without_order_leads_to_a_lid_test_marker_event(self):
+        self.tracker.observe([0])
+        self.tracker.due_target_request()
+        self.tracker.handle_command(self.LID_TEST_TARGET)
+        self.assertEqual(self.tracker.state, delivery.SCANNING)
+
+        sent = self.frames([0], 10)
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["mode"], "LID_TEST")
+        self.assertIsNone(sent[0]["orderId"])
+        self.assertEqual((sent[0]["lockerId"], sent[0]["compartmentId"], sent[0]["arucoMarkerId"]), (7, 39, 0))
+
+    def test_after_a_lid_test_the_marker_must_leave_the_view_before_testing_again(self):
+        self.tracker.observe([0])
+        self.tracker.handle_command(self.LID_TEST_TARGET)
+        self.frames([0], 10)
+        self.tracker.handle_command({"eventType": "LID_OPENED", "sessionId": "S"})
+        self.tracker.handle_command({"eventType": "LID_TEST_DONE", "errorMessage": "Đã thử xong"})
+        self.assertEqual(self.tracker.state, delivery.NO_TARGET)
+
+        for _ in range(5):                       # camera vẫn chĩa vào mã: không thử lại
+            self.tracker.observe([0])
+            self.clock.now += 11
+            self.tracker.observe([0])
+            self.assertIsNone(self.tracker.due_target_request())
+
+        self.clock.now += 3                      # mã rời khung hình > 2 giây
+        self.tracker.observe([])
+        self.assertIsNone(self.tracker.due_target_request())
+        self.tracker.observe([0])                # đưa mã vào lại ⇒ được thử lần mới
+        self.assertIsNotNone(self.tracker.due_target_request())
+
+    def test_failed_lid_test_does_not_retry_by_itself(self):
+        self.tracker.observe([0])
+        self.tracker.handle_command(self.LID_TEST_TARGET)
+        self.frames([0], 10)
+        self.tracker.handle_command({"eventType": "LID_OPEN_FAILED", "errorCode": "LOCKER_NO_ACK"})
+        self.assertEqual(self.tracker.state, delivery.NO_TARGET)
+        self.clock.now += 30
+        self.assertEqual(self.frames([0], 20), [])
+
     def test_marker_seen_then_target_arrives_then_lid_request_is_sent(self):
         self.tracker.observe([23])
         self.assertIsNotNone(self.tracker.due_target_request())

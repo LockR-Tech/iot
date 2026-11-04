@@ -439,12 +439,14 @@ class LidController:
         """Chu kỳ một bước (giây): "chaydan" = các nấc của lệnh chaydan rồi chạy đều ở `rps`;
         "linear" = tăng tốc tuyến tính trong `ramp_steps` bước đầu."""
         if self.profile == "chaydan":
+            # Nấc tăng tốc không được nhanh hơn `rps` đã chỉnh (trục nặng chạy chậm hơn nấc 4,8 ms).
+            cruise = 1.0 / self.steps_per_sec
             done = 0
             for count, period in CHAYDAN_STAGES:
                 if step_index < done + count:
-                    return period
+                    return max(period, cruise)
                 done += count
-            return 1.0 / self.steps_per_sec
+            return cruise
         if self.ramp_steps and step_index < self.ramp_steps:
             rate = self.start_steps_per_sec + (self.steps_per_sec - self.start_steps_per_sec) * step_index / self.ramp_steps
         else:

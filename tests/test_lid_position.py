@@ -107,6 +107,12 @@ class ChaydanProfileTest(unittest.TestCase):
         self.assertAlmostEqual(self.lid._interval(200), 1 / 358)
         self.assertAlmostEqual(self.lid._interval(5000), 1 / 358)
 
+    def test_slow_rps_never_runs_faster_than_configured(self):
+        self.lid.tune(rps=0.5, start_rps=0.2)            # 100 bước/giây = 10 ms/bước
+        self.assertAlmostEqual(self.lid._interval(0), 0.0108)
+        self.assertAlmostEqual(self.lid._interval(150), 0.01)   # không tăng lên nấc 4,8 ms
+        self.assertAlmostEqual(self.lid._interval(5000), 0.01)
+
     def test_pulse_is_half_the_period_like_pinctrl_dh_dl(self):
         for step in (0, 150, 3000):
             interval = self.lid._interval(step)

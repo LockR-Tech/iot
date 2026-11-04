@@ -70,10 +70,14 @@ STATE_MESSAGES = {
 }
 
 
+LID_TEST_MODE = "LID_TEST"         # chế độ thử nắp (admin bật): mục tiêu không gắn đơn
+REARM_AFTER_TEST_S = 2.0           # thử xong: mã phải rời khung hình chừng này giây mới thử lại
+
+
 @dataclass(frozen=True)
 class Target:
     mission_id: Optional[int]
-    order_id: int
+    order_id: Optional[int]        # None khi là mục tiêu của chế độ thử nắp
     locker_id: int
     box_id: Optional[int]
     marker_id: int
@@ -83,14 +87,15 @@ class Target:
     @staticmethod
     def from_command(cmd: dict) -> Optional["Target"]:
         try:
+            mode = str(cmd.get("mode") or "REAL_OUTDOOR")
             return Target(
                 mission_id=_int(cmd.get("missionId")),
-                order_id=int(cmd["orderId"]),
+                order_id=_int(cmd.get("orderId")) if mode == LID_TEST_MODE else int(cmd["orderId"]),
                 locker_id=int(cmd["lockerId"]),
                 box_id=_int(cmd.get("compartmentId")),
                 marker_id=int(cmd["arucoMarkerId"]),
                 dictionary=str(cmd.get("arucoDictionary") or "DICT_4X4_50"),
-                mode=str(cmd.get("mode") or "REAL_OUTDOOR"),
+                mode=mode,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -139,6 +144,8 @@ class DeliveryTracker:
         self._correlation_id = None
         self._last_target_request = None
         self._marker_seen_at = None
+        self._seen_markers = {}            # {mã ArUco: lần cuối thấy} — gửi kèm TARGET_REQUEST
+        self._rearm_needed = False         # vừa thử nắp xong: chờ mã rời khung hình
         self.marker_recent_s = marker_recent_s
         self.lid_confirmation = None
         self.drop_simulation_s = None
@@ -154,16 +161,23 @@ class DeliveryTracker:
         chưa có nhiệm vụ thì hỏi mỗi `target_poll_s`, đã có thì mỗi `target_refresh_s` (biết nhiệm vụ huỷ/xong)."""
         with self._lock:
             now = self._clock()
+            if self._rearm_needed:
+                # Vừa thử nắp xong: không hỏi lại cho tới khi mã rời khung hình đủ lâu (tránh mở/đóng liên tục).
+                if self._marker_seen_at is None or now - self._marker_seen_at >= REARM_AFTER_TEST_S:
+                    self._rearm_needed = False
+                return None
             if self._marker_seen_at is None or now - self._marker_seen_at > self.marker_recent_s:
                 return None
             every = self.target_poll_s if self.target is None else self.target_refresh_s
             if self._last_target_request is not None and now - self._last_target_request < every:
                 return None
             self._last_target_request = now
+            visible = sorted(m for m, at in self._seen_markers.items() if now - at <= self.marker_recent_s)
             return {
                 "messageId": str(uuid.uuid4()),
                 "eventType": "TARGET_REQUEST",
                 "droneId": self.drone_id,
+                "visibleMarkers": visible,      # chế độ thử nắp: hệ thống chọn ô theo mã đang thấy
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -181,6 +195,9 @@ class DeliveryTracker:
             now = self._clock()
             if detections:
                 self._marker_seen_at = now   # có mã ArUco trong khung hình ⇒ được phép hỏi mục tiêu
+                for item in detections:
+                    marker_id = item[0] if isinstance(item, tuple) else item
+                    self._seen_markers[int(marker_id)] = now
             self._expire_waits(now)
             if self.target is None or self.state not in (SCANNING, STABILIZING):
                 return None
@@ -282,11 +299,20 @@ class DeliveryTracker:
             elif event == "DELIVERY_READY":
                 self._drop_report_due = False
                 self._set(COMPLETED, cmd.get("errorMessage") or STATE_MESSAGES[COMPLETED])
-            elif event in ("LID_OPEN_FAILED", "LID_CLOSE_FAILED", "SAFETY_ABORT"):
+            elif event == "LID_TEST_DONE":
+                # Thử nắp xong: bỏ mục tiêu, chờ mã rời khung hình rồi mới thử lần sau.
+                self._rearm_needed = True
+                self._clear_target(cmd.get("errorMessage") or "Đã thử nắp xong")
+            elif event in ("LID_OPEN_FAILED", "LID_CLOSE_FAILED", "SAFETY_ABORT", "MARKER_REJECTED"):
                 self._drop_report_due = False
-                self._set(FAILED, f"{cmd.get('errorCode') or event}: {cmd.get('errorMessage') or ''}".strip())
-            elif event == "MARKER_REJECTED":
-                self._set(FAILED, f"Hệ thống từ chối mã: {cmd.get('errorMessage') or ''}".strip())
+                text = (f"Hệ thống từ chối mã: {cmd.get('errorMessage') or ''}" if event == "MARKER_REJECTED"
+                        else f"{cmd.get('errorCode') or event}: {cmd.get('errorMessage') or ''}").strip()
+                if self.target.mode == LID_TEST_MODE:
+                    # Thử nắp lỗi: không tự quét lại sau cooldown (tránh lặp lệnh nắp) — chờ mã rời khung hình.
+                    self._rearm_needed = True
+                    self._clear_target(text)
+                else:
+                    self._set(FAILED, text)
         return None
 
     def _on_target(self, cmd: dict) -> None:
