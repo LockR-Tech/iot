@@ -14,6 +14,8 @@ wheels/
 config/cabinet_state.json
 # Tốc độ/xung nắp trượt chỉnh trên bảng điều khiển kỹ thuật (/service)
 config/lid_tuning.json
+# Vị trí bàn trượt theo đếm bước (tủ chưa có công tắc hành trình), riêng từng Pi
+config/lid_position.json*
 # Bản đồ chân admin đẩy xuống từ web (lệnh hw-config), riêng từng Pi
 config/hardware_config.json*
 # Nhật ký điều khiển (mở ô, chạy nắp) chờ gửi lên backend

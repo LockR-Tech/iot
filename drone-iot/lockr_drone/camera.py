@@ -270,7 +270,10 @@ class CameraCapture:
             "VALIDATED":    ("TARGET VERIFIED",  (0, 255, 0)),     # Green
             "LID_OPENING":  ("LID OPENING",      (255, 180, 50)),  # Light Blue
             "LID_OPEN":     ("LID OPEN",         (255, 180, 50)),  # Light Blue
-            "COMPLETED":    ("COMPLETED",        (0, 255, 0)),     # Green
+            "DROPPING":     ("DROPPING CARGO",   (0, 165, 255)),   # Orange
+            "DROP_REPORTED": ("DROP REPORTED",   (0, 165, 255)),   # Orange
+            "LID_CLOSING":  ("LID CLOSING",      (255, 180, 50)),  # Light Blue
+            "COMPLETED":   ("COMPLETED",        (0, 255, 0)),     # Green
             "FAILED":       ("FAILED",           (0, 0, 255)),     # Red
         }
         label, state_color = state_configs.get(self.state, (self.state, (200, 200, 200)))
@@ -312,15 +315,18 @@ class CameraCapture:
             "REQUEST_SENT": f"Marker #{target} confirmed - lid request sent",
             "VALIDATED": "Server sent OPEN to locker - waiting for locker",
             "LID_OPENING": "Locker accepted command - lid moving",
+            "DROP_REPORTED": "Drop reported - waiting for server",
+            "LID_CLOSING": "Drop done - locker closing lid",
             "COMPLETED": "Delivery completed - lid closed",
             "FAILED": "Lid request failed - see status",
         }.get(self.state)
         if self.state == "LID_OPEN":
-            drop = snap.get("dropSimulationSeconds")
-            left = max(0.0, float(drop) - snap.get("secondsInState", 0)) if drop else None
             confirmed = snap.get("lidConfirmation") != "STEP_COUNT"
-            bottom_msg = ("Lid open (limit switch)" if confirmed else "Lid moved full travel (no limit switch)") + (
-                f" - simulated drop {left:.1f}s" if left else "")
+            bottom_msg = "Lid open (limit switch)" if confirmed else "Lid moved full travel (no limit switch)"
+        elif self.state == "DROPPING":
+            drop = snap.get("dropSimulationSeconds") or 0
+            left = max(0.0, float(drop) - snap.get("secondsInState", 0))
+            bottom_msg = f"Lid open - simulated cargo drop {left:.1f}s"
 
         if bottom_msg:
             (bw, bh), _ = cv2.getTextSize(bottom_msg, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)

@@ -145,7 +145,7 @@ class OpenRoutingTest(unittest.TestCase):
         self.send({"commandId": "d-1", "boxId": 40, "slotIndex": 2, "action": "OPEN", "lid": True})
         r = self.mqtt.on("cabinet/7/command/open/result")[-1]
         self.assertEqual(r["status"], "SUCCESS")
-        self.assertIn("hardware bypass", r["errorMessage"])
+        self.assertEqual(r["lidConfirmation"], "STEP_COUNT")   # đi đường nắp trượt, không phải relay
         self.assertEqual(self.relay_pulses(), [])
 
     def test_lid_follows_box_mapping(self):
@@ -154,7 +154,7 @@ class OpenRoutingTest(unittest.TestCase):
             self.send({"commandId": "d-3", "boxId": 40, "slotIndex": 2, "action": "OPEN", "lid": True})
             r = self.mqtt.on("cabinet/7/command/open/result")[-1]
             self.assertEqual(r["status"], "SUCCESS")
-            self.assertIn("hardware bypass", r["errorMessage"])
+            self.assertEqual(r["lidConfirmation"], "STEP_COUNT")   # đi đường nắp trượt, không phải relay
 
             # Drone tới ô 2 (không có nắp): báo lỗi, không mở nhầm nắp ô 3, không kích relay cửa trước.
             self.send({"commandId": "d-2", "boxId": 39, "slotIndex": 1, "action": "OPEN", "lid": True})

@@ -133,16 +133,87 @@ class DeliveryTrackerTest(unittest.TestCase):
         self.tracker.handle_command({"eventType": "LID_OPENING", "orderId": 21})
         self.assertEqual(self.tracker.state, delivery.LID_OPENING)
         self.tracker.handle_command({"eventType": "LID_OPENED", "orderId": 21, "lidConfirmation": "STEP_COUNT",
-                                     "dropSimulationSeconds": 7,
                                      "errorMessage": "Nắp đã chạy hết hành trình theo số bước"})
         self.assertEqual(self.tracker.state, delivery.LID_OPEN)
         self.assertEqual(self.tracker.snapshot()["lidConfirmation"], "STEP_COUNT")
-        self.assertIn("giả lập drone nhả hàng 7 giây", self.tracker.message)
-        # Nắp mở không làm Pi gửi thêm gì (không tự đáp, không tự nhả hàng).
+        # Không có lệnh nhả hàng (giao ngoài trời): Pi không tự báo gì.
         self.assertEqual(self.frames([23], 20), [])
+        self.clock.now += 60
+        self.assertIsNone(self.tracker.due_drop_report())
 
         self.tracker.handle_command({"eventType": "DELIVERY_READY", "orderId": 21})
         self.assertEqual(self.tracker.state, delivery.COMPLETED)
+
+    def open_lid_with_drop_command(self, seconds=7):
+        self.tracker.handle_command(TARGET)
+        self.frames([23], 10)
+        self.tracker.handle_command({"eventType": "MARKER_VALIDATED", "orderId": 21})
+        self.tracker.handle_command({"eventType": "LID_OPENING", "orderId": 21})
+        self.tracker.handle_command({"eventType": "LID_OPENED", "orderId": 21, "sessionId": "SESSION-21",
+                                     "correlationId": "corr-21", "lidConfirmation": "STEP_COUNT",
+                                     "dropSimulationSeconds": seconds})
+
+    # lệnh nhả hàng: giả lập đúng số giây cấu hình rồi báo DROP_PHASE_COMPLETED đúng một lần
+    def test_drop_command_is_simulated_for_the_configured_seconds_then_reported(self):
+        self.open_lid_with_drop_command(7)
+        self.assertEqual(self.tracker.state, delivery.DROPPING)
+        self.assertIn("7 giây", self.tracker.message)
+
+        self.clock.now += 6.5
+        self.assertIsNone(self.tracker.due_drop_report(), "báo nhả hàng trước khi hết thời gian giả lập")
+
+        self.clock.now += 0.6
+        report = self.tracker.due_drop_report()
+        self.assertEqual(report["eventType"], "DROP_PHASE_COMPLETED")
+        self.assertEqual(report["sessionId"], "SESSION-21")
+        self.assertEqual(report["correlationId"], "corr-21")
+        self.assertEqual((report["orderId"], report["lockerId"], report["missionId"]), (21, 7, 301))
+        self.assertEqual(report["droneId"], "DRONE-A1")
+        self.assertEqual(self.tracker.state, delivery.DROP_REPORTED)
+        self.assertIsNone(self.tracker.due_drop_report())
+
+        self.tracker.handle_command({"eventType": "LID_CLOSING", "orderId": 21})
+        self.assertEqual(self.tracker.state, delivery.LID_CLOSING)
+        self.clock.now += 60
+        self.assertIsNone(self.tracker.due_drop_report(), "đã được xác nhận mà vẫn gửi lại")
+
+        self.tracker.handle_command({"eventType": "DELIVERY_READY", "orderId": 21})
+        self.assertEqual(self.tracker.state, delivery.COMPLETED)
+
+    def test_duplicate_lid_opened_does_not_restart_the_drop(self):
+        self.open_lid_with_drop_command(7)
+        self.clock.now += 8
+        self.assertIsNotNone(self.tracker.due_drop_report())
+        self.tracker.handle_command({"eventType": "LID_OPENED", "orderId": 21, "dropSimulationSeconds": 7})
+        self.assertEqual(self.tracker.state, delivery.DROP_REPORTED)
+
+    def test_unconfirmed_drop_report_is_resent_a_limited_number_of_times(self):
+        self.open_lid_with_drop_command(3)
+        self.clock.now += 3
+        sent = [self.tracker.due_drop_report()]
+        for _ in range(5):
+            self.clock.now += 15
+            sent.append(self.tracker.due_drop_report())
+        reports = [r for r in sent if r]
+        self.assertEqual(len(reports), 3)
+        self.assertEqual({r["sessionId"] for r in reports}, {"SESSION-21"})
+        self.assertEqual(len({r["messageId"] for r in reports}), 3)
+        self.assertEqual(self.tracker.state, delivery.FAILED)
+
+    def test_report_that_could_not_be_sent_is_retried_without_using_up_attempts(self):
+        self.open_lid_with_drop_command(2)
+        self.clock.now += 2
+        self.assertIsNotNone(self.tracker.due_drop_report())
+        self.tracker.drop_report_failed()          # MQTT mất kết nối lúc gửi
+        retry = self.tracker.due_drop_report()
+        self.assertEqual(retry["attempt"], 1)
+
+    def test_restart_while_lid_is_open_resumes_the_drop_from_the_target(self):
+        self.tracker.handle_command(dict(TARGET, sessionState="LID_OPENED", sessionId="SESSION-21",
+                                         dropSimulationSeconds=5))
+        self.assertEqual(self.tracker.state, delivery.DROPPING)
+        self.clock.now += 5
+        self.assertEqual(self.tracker.due_drop_report()["sessionId"], "SESSION-21")
 
     def test_failure_is_shown_then_scanning_resumes_after_cooldown(self):
         self.tracker.handle_command(TARGET)
@@ -168,13 +239,35 @@ class DeliveryTrackerTest(unittest.TestCase):
         self.assertEqual(self.tracker.state, delivery.NO_TARGET)
         self.assertEqual(self.frames([23], 20), [])
 
-    def test_target_requests_are_paced(self):
-        self.assertIsNotNone(self.tracker.due_target_request())
+    def test_empty_camera_never_asks_for_a_target(self):
+        for _ in range(30):                    # 5 phút camera trống / quay xung quanh
+            self.tracker.observe([])
+            self.assertIsNone(self.tracker.due_target_request())
+            self.clock.now += 10
+
+    def test_target_is_asked_only_while_a_marker_is_in_view_and_paced(self):
+        self.tracker.observe([5])              # thấy một mã ArUco bất kỳ
+        self.assertEqual(self.tracker.due_target_request()["eventType"], "TARGET_REQUEST")
         self.assertIsNone(self.tracker.due_target_request())
         self.clock.now += 11
-        self.assertEqual(self.tracker.due_target_request()["eventType"], "TARGET_REQUEST")
-        self.tracker.request_target_now()      # vừa kết nối lại broker
+        self.tracker.observe([5])
         self.assertIsNotNone(self.tracker.due_target_request())
+
+        self.clock.now += 11                   # mã đã ra khỏi khung hình
+        self.tracker.observe([])
+        self.assertIsNone(self.tracker.due_target_request())
+
+        self.tracker.request_target_now()      # vừa kết nối lại broker: chưa thấy mã thì vẫn im lặng
+        self.assertIsNone(self.tracker.due_target_request())
+        self.tracker.observe([23])
+        self.assertIsNotNone(self.tracker.due_target_request())
+
+    def test_marker_seen_then_target_arrives_then_lid_request_is_sent(self):
+        self.tracker.observe([23])
+        self.assertIsNotNone(self.tracker.due_target_request())
+        self.tracker.handle_command(TARGET)
+        sent = self.frames([23], 10)
+        self.assertEqual([p["eventType"] for p in sent], ["MARKER_DETECTED"])
 
 
 if __name__ == "__main__":

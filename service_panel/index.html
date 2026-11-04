@@ -410,6 +410,18 @@ function axisCard(a) {
     </div>
     <p class="small muted">Chạy đủ số vòng thì dừng; chạm công tắc ở phía đang chạy thì dừng sớm.</p>
     <hr>
+    <h2>Vị trí bàn trượt</h2>
+    <p class="small muted">Chưa có công tắc hành trình: Pi đếm bước để biết bàn trượt ở đâu, Mở/Đóng hết (và lệnh nắp của drone) chỉ chạy phần còn thiếu tới đầu ray. Sau khi quay tay, mất điện giữa chừng hoặc nghe motor trượt bước, nhìn bàn trượt rồi đặt lại vị trí.</p>
+    <div class="row">
+      <button type="button" data-pos="home">Đang ở gốc (đóng)</button>
+      <button type="button" data-pos="end">Đang ở cuối ray (mở)</button>
+    </div>
+    <div class="row">
+      <label class="f" style="width:150px">Cách gốc (vòng)<input type="number" data-k="posRevs" min="0" step="0.5"></label>
+      <button type="button" data-pos="set">Lưu vị trí</button>
+      <button type="button" data-pos="unknown">Không biết</button>
+    </div>
+    <hr>
     <h2>Tốc độ và xung</h2>
     <div>
       <div class="row" style="justify-content:space-between"><span class="small muted">Tốc độ chạy</span><span><span class="big" data-k="rpsBig"></span> vòng/giây</span></div>
@@ -454,7 +466,9 @@ function updateAxis(card, a) {
   const pill = q(card, 'state'); pill.className = 'pill ' + cls; pill.innerHTML = `<i></i>${label}`;
   q(card, 'home').classList.toggle('hit', !!st.homeLimit);
   q(card, 'end').classList.toggle('hit', !!st.endLimit);
-  q(card, 'pos').textContent = st.positionRevs === null ? 'chưa biết — bấm "Về gốc" một lần' : `cách gốc ${fmt(st.positionRevs)} vòng`;
+  q(card, 'pos').textContent = st.positionRevs === null
+    ? (st.positionTravel ? 'chưa biết — đặt vị trí ở mục "Vị trí bàn trượt"' : 'chưa biết — bấm "Về gốc" một lần')
+    : `cách gốc ${fmt(st.positionRevs)} / ${fmt(st.config.max_revs)} vòng`;
   q(card, 'travel').textContent = st.travelRevs === null ? 'chưa đo (chạy từ gốc tới cuối một lần)' : `${fmt(st.travelRevs)} vòng gốc → cuối`;
   const lr = st.lastResult;
   q(card, 'last').textContent = lr ? `${lr.action || ''} · ${lr.result}${lr.error ? ' ' + lr.error : ''} · ${fmt(lr.revolutions)} vòng` : '—';
@@ -466,7 +480,8 @@ function updateAxis(card, a) {
     q(card, 'progress').style.width = total ? `${Math.min(100, 100 * done / total)}%` : '100%';
     q(card, 'progressText').textContent = total ? `${fmt(done)} / ${fmt(total)} vòng` : `${fmt(done)} vòng · chạy tới công tắc`;
   }
-  card.querySelectorAll('[data-cmd]:not([data-cmd=stop]), [data-jog], [data-k=save]').forEach(b => b.disabled = st.busy);
+  card.querySelectorAll('[data-cmd]:not([data-cmd=stop]), [data-jog], [data-pos], [data-k=save]').forEach(b => b.disabled = st.busy);
+  card._maxRevs = st.config.max_revs;
   q(card, 'saveHint').textContent = st.busy ? 'Dừng trục trước khi lưu.' : '';
   if (!dirty[a.axis]) fillForm(card, st.config);
   hints(card, st);
@@ -502,6 +517,15 @@ function bindAxis(card, axis) {
     try {
       const r = await api(`/lids/${axis}/jog`, { method: 'POST', body: { revolutions: +revs.value, direction: b.dataset.jog } });
       if (r.result === 'FAIL') toast(`Trục ${axis}: ${r.error}`, true);
+    } catch (e) { toast(`Trục ${axis}: ${e.message}`, true); }
+    refresh();
+  }));
+  card.querySelectorAll('[data-pos]').forEach(b => b.addEventListener('click', async () => {
+    const kind = b.dataset.pos;
+    const revolutions = kind === 'home' ? 0 : kind === 'end' ? card._maxRevs : kind === 'unknown' ? null : +q(card, 'posRevs').value;
+    try {
+      await api(`/lids/${axis}/position`, { method: 'PUT', body: { revolutions } });
+      toast(revolutions === null ? `Trục ${axis}: vị trí chưa biết` : `Trục ${axis}: đã đặt vị trí cách gốc ${fmt(revolutions)} vòng`);
     } catch (e) { toast(`Trục ${axis}: ${e.message}`, true); }
     refresh();
   }));

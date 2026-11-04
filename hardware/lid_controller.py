@@ -37,6 +37,14 @@ TUNING_LIMITS = {
     "steps_per_rev": (200, 25600),  # theo công tắc DIP của TB6600
 }
 
+# Kiểu tăng tốc: "linear" = tăng đều từ start_rps lên rps trong ramp_steps bước, xung pulse_us;
+# "chaydan" = đúng lệnh `chaydan` kỹ thuật tủ CAB-TU01 đã kiểm chứng (03/11/2026, chạy bằng pinctrl):
+#   100 bước `dh; sleep 0.004; dl; sleep 0.004` → 100 bước `… sleep 0.001 …` → còn lại `dh; dl`.
+# Mỗi lệnh pinctrl mất ≈ 1,4 ms (đo trên Pi 04/11) ⇒ chu kỳ ≈ 10,8 ms → 4,8 ms → 1/rps (≈ 2,8 ms ở 1,8 vòng/s),
+# xung chiếm nửa chu kỳ. Nấc cuối dùng `rps` để chỉnh được.
+PROFILES = ("linear", "chaydan")
+CHAYDAN_STAGES = ((100, 0.0108), (100, 0.0048))   # (số bước, chu kỳ một bước giây)
+
 
 class LidState(str, Enum):
     UNKNOWN = "UNKNOWN"      # chưa về gốc lần nào
@@ -65,6 +73,8 @@ class LidController:
         pulse_us: int = 20,
         steps_per_rev: int = 1600,
         axis: int = 1,
+        position_travel: bool = False,
+        profile: str = "linear",
     ):
         pins_used = [pul_pin, dir_pin, home_pin, end_pin]
         if len(set(pins_used)) != len(pins_used):
@@ -85,6 +95,9 @@ class LidController:
         self.max_steps = max_steps
         self.pulse_us = pulse_us
         self.steps_per_rev = steps_per_rev
+        if profile not in PROFILES:
+            raise ValueError(f"profile phải là một trong {PROFILES}")
+        self.profile = profile
 
         self._group: Optional[PinGroup] = None
         self._move_lock = threading.Lock()
@@ -101,6 +114,11 @@ class LidController:
         self._toward_end = True                  # chiều của lệnh đang chạy (jog không tự ghi trong motion)
         # Gọi khi mỗi lượt chạy kết thúc: on_finish(axis, last_result) — nhật ký điều khiển tủ.
         self.on_finish: Optional[Callable[[int, dict], None]] = None
+        # Tủ chưa có công tắc hành trình: tin vị trí đếm bước. Ray dài đúng `max_steps` (gốc = đóng, cuối = mở);
+        # Mở/Đóng hết chỉ chạy phần còn thiếu tới đầu ray rồi coi là tới — không đẩy nắp vào điểm chặn.
+        self.position_travel = position_travel
+        # Gọi mỗi khi vị trí đổi (lưu ra file để còn nhớ sau khi khởi động lại): on_position(axis, steps|None).
+        self.on_position: Optional[Callable[[int, Optional[int]], None]] = None
 
     def start(self) -> "LidController":
         idle = self.step_active_low          # không có xung: opto tắt
@@ -146,6 +164,7 @@ class LidController:
             "steps_per_rev": self.steps_per_rev,
             "open_dir_high": self.open_dir_high,
             "limit_active_low": self.limit_active_low,
+            "profile": self.profile,
         }
 
     def status(self) -> dict:
@@ -166,6 +185,7 @@ class LidController:
             "positionSteps": self.position,
             "positionRevs": revs(self.position),
             "travelRevs": revs(self.travel_steps),
+            "positionTravel": self.position_travel,
             "stepsPerSec": self.steps_per_sec,
             "effectivePulseUs": round(self._pulse_seconds(1.0 / self.steps_per_sec) * 1_000_000, 1),
             "pins": {"pul": self.pul_pin, "dir": self.dir_pin, "home": self.home_pin, "end": self.end_pin},
@@ -176,11 +196,15 @@ class LidController:
         """Đổi tốc độ/xung/giới hạn lúc chạy. Không đổi được khi động cơ đang quay."""
         if self.busy:
             raise RuntimeError("LID_BUSY")
-        unknown = set(changes) - set(TUNING_LIMITS) - {"open_dir_high", "limit_active_low"}
+        unknown = set(changes) - set(TUNING_LIMITS) - {"open_dir_high", "limit_active_low", "profile"}
         if unknown:
             raise ValueError(f"Không có thông số {sorted(unknown)}")
         changes = {k: v for k, v in changes.items() if v is not None}
+        if "profile" in changes and changes["profile"] not in PROFILES:
+            raise ValueError(f"profile phải là một trong {PROFILES} (đang là {changes['profile']})")
         for key, value in changes.items():
+            if key == "profile":
+                continue
             low, high = TUNING_LIMITS.get(key, (None, None))
             if low is not None and not low <= float(value) <= high:
                 raise ValueError(f"{key} phải trong khoảng {low}–{high} (đang là {value})")
@@ -189,6 +213,7 @@ class LidController:
             merged["start_rps"] = merged["rps"]
 
         spr = int(merged["steps_per_rev"])
+        position_revs = None if self.position is None else self.position / self.steps_per_rev
         self.steps_per_rev = spr
         self.steps_per_sec = max(1, round(float(merged["rps"]) * spr))
         self.start_steps_per_sec = max(1, min(round(float(merged["start_rps"]) * spr), self.steps_per_sec))
@@ -197,18 +222,76 @@ class LidController:
         self.max_steps = max(1, round(float(merged["max_revs"]) * spr))
         self.open_dir_high = bool(merged["open_dir_high"])
         self.limit_active_low = bool(merged["limit_active_low"])
+        self.profile = str(merged.get("profile") or "linear")
         if self._group is not None:
             self._group.write(self.dir_pin, self.open_dir_high)
+        if position_revs is not None:
+            # Vị trí giữ theo vòng khi đổi số bước/vòng; đổi chiều dài ray thì kẹp trong ray mới.
+            self.position = round(position_revs * spr)
+            if self.position_travel:
+                self.position = max(0, min(self.position, self.max_steps))
+                if self.state not in (LidState.MOVING, LidState.UNKNOWN):
+                    self.state = self._state_for_position()
         logger.info(f"Lid {self.axis} tuned: {self.config()}")
         return self.config()
 
     # ─── lệnh ───
 
     def open(self) -> dict:
-        return self._move(toward_end=True, motion="open")
+        return self._travel(toward_end=True, motion="open")
 
     def close(self) -> dict:
-        return self._move(toward_end=False, motion="close")
+        return self._travel(toward_end=False, motion="close")
+
+    def remaining_steps(self, toward_end: bool) -> Optional[int]:
+        """Số bước còn lại tới đầu ray theo vị trí đếm bước; None nếu không dùng / chưa biết vị trí."""
+        if not self.position_travel or self.position is None:
+            return None
+        return max(0, self.max_steps - self.position) if toward_end else max(0, self.position)
+
+    def _travel(self, toward_end: bool, motion: str) -> dict:
+        remaining = self.remaining_steps(toward_end)
+        if remaining is None:
+            return self._move(toward_end=toward_end, motion=motion)
+        result = self._move(toward_end=toward_end, motion=motion, step_budget=remaining, reach_on_budget=True)
+        if result.get("result") == "OK":
+            result["byPosition"] = True
+        return result
+
+    def set_position(self, revolutions: Optional[float]) -> dict:
+        """Hiệu chỉnh: báo cho Pi bàn trượt đang cách gốc bao nhiêu vòng (None = không biết).
+        0 = ở gốc (đóng), bằng giới hạn vòng = ở cuối ray (mở)."""
+        if self.busy:
+            raise RuntimeError("LID_BUSY")
+        if revolutions is None:
+            self.position, self.state = None, LidState.UNKNOWN
+        else:
+            revs = float(revolutions)
+            max_revs = self.max_steps / self.steps_per_rev
+            if not 0 <= revs <= max_revs:
+                raise ValueError(f"Vị trí phải trong khoảng 0–{max_revs:g} vòng")
+            self.position = round(revs * self.steps_per_rev)
+            self.state = self._state_for_position()
+        self.last_error = None
+        logger.info(f"Lid {self.axis} position set: {self.position} steps ({self.state.value})")
+        self._notify_position()
+        return self.status()
+
+    def _state_for_position(self) -> "LidState":
+        if self.position is None:
+            return LidState.UNKNOWN
+        if self.position <= 0:
+            return LidState.CLOSED
+        if self.position >= self.max_steps:
+            return LidState.OPEN
+        return LidState.STOPPED
+
+    def _notify_position(self):
+        if self.on_position:
+            try:
+                self.on_position(self.axis, self.position)
+            except Exception as e:
+                logger.error(f"Lid {self.axis} on_position failed: {e}")
 
     def home(self) -> dict:
         """Về gốc = đóng nắp tới công tắc gốc; gọi sau khi bật máy."""
@@ -251,7 +334,9 @@ class LidController:
 
     # ─── chạy động cơ ───
 
-    def _move(self, toward_end: bool, motion: str, step_budget: Optional[int] = None) -> dict:
+    def _move(self, toward_end: bool, motion: str, step_budget: Optional[int] = None,
+              reach_on_budget: bool = False) -> dict:
+        """`reach_on_budget`: chạy đủ `step_budget` bước nghĩa là đã tới đầu ray (vị trí đếm bước)."""
         if self._group is None:
             return {"result": "FAIL", "error": "LID_NOT_STARTED"}
         if not self._move_lock.acquire(blocking=False):
@@ -290,8 +375,20 @@ class LidController:
                     self.position += 1 if toward_end else -1
 
             if step_budget is not None:
-                self.state = LidState.STOPPED
+                if reach_on_budget:
+                    self._reached(target)
+                    logger.info(f"Lid {self.axis} {target.value} after {steps} steps (theo vị trí đếm bước)")
+                else:
+                    self.state = LidState.STOPPED
                 return self._finish({"result": "OK", "state": self.state.value, "steps": steps}, steps)
+            if self.position_travel:
+                # Không có công tắc: chạy đủ cả chiều dài ray ⇒ chắc chắn đã ở đầu ray — lấy làm mốc vị trí.
+                if toward_end:
+                    self.position = self.max_steps
+                self._reached(target)
+                logger.info(f"Lid {self.axis} {target.value}: chạy hết {steps} bước (cả ray), lấy làm mốc vị trí")
+                return self._finish({"result": "OK", "state": self.state.value, "steps": steps,
+                                     "byStepCount": True}, steps)
             self.state = LidState.FAULT
             self.last_error = "LIMIT_NOT_REACHED"
             logger.error(f"Lid {self.axis} FAULT: {steps} steps toward {target.value} without hitting the limit switch")
@@ -302,6 +399,17 @@ class LidController:
             self.motion = None
             self._move_lock.release()
 
+    def assume_reached(self, toward_end: bool) -> None:
+        """Tủ chưa có công tắc hành trình: lượt chạy hết số vòng giới hạn được chấp nhận là tới đích
+        (LID_REQUIRE_LIMIT_SWITCH tắt). Ghi nhận OPEN/CLOSED để lệnh lặp không đẩy nắp thêm một lượt."""
+        if self.busy:
+            return
+        self.last_error = None
+        if toward_end:
+            self.position = self.max_steps   # hết ray: làm mốc cho lần chạy sau
+        self._reached(LidState.OPEN if toward_end else LidState.CLOSED)
+        self._notify_position()
+
     def _reached(self, target: LidState):
         self.state = target
         if target == LidState.CLOSED:
@@ -310,6 +418,12 @@ class LidController:
             self.travel_steps = self.position
 
     def _finish(self, result: dict, steps: int) -> dict:
+        if self.position_travel and self.position is not None:
+            # Không có công tắc: chạy quá đầu ray thì bàn trượt chỉ đứng ở đầu ray (motor trượt bước).
+            self.position = max(0, min(self.position, self.max_steps))
+            if self.state == LidState.STOPPED:
+                self.state = self._state_for_position()
+        self._notify_position()
         self.last_steps = steps
         self.last_result = {**result, "action": self.motion,
                             "direction": "open" if self._toward_end else "close",
@@ -322,7 +436,15 @@ class LidController:
         return result
 
     def _interval(self, step_index: int) -> float:
-        """Chu kỳ một bước (giây), tăng tốc tuyến tính trong `ramp_steps` bước đầu."""
+        """Chu kỳ một bước (giây): "chaydan" = các nấc của lệnh chaydan rồi chạy đều ở `rps`;
+        "linear" = tăng tốc tuyến tính trong `ramp_steps` bước đầu."""
+        if self.profile == "chaydan":
+            done = 0
+            for count, period in CHAYDAN_STAGES:
+                if step_index < done + count:
+                    return period
+                done += count
+            return 1.0 / self.steps_per_sec
         if self.ramp_steps and step_index < self.ramp_steps:
             rate = self.start_steps_per_sec + (self.steps_per_sec - self.start_steps_per_sec) * step_index / self.ramp_steps
         else:
@@ -330,7 +452,10 @@ class LidController:
         return 1.0 / rate
 
     def _pulse_seconds(self, interval: float) -> float:
-        """Độ rộng xung thật: `pulse_us`, nhưng không quá nửa chu kỳ để còn thời gian nghỉ."""
+        """Độ rộng xung thật: "chaydan" = nửa chu kỳ (như pinctrl dh … dl); "linear" = `pulse_us`,
+        nhưng không quá nửa chu kỳ để còn thời gian nghỉ."""
+        if self.profile == "chaydan":
+            return interval / 2
         return min(self.pulse_us / 1_000_000, interval / 2)
 
     def _step(self, interval: float):

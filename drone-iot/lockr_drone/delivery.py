@@ -2,7 +2,7 @@
 
 Luồng (Pi → backend → MQTT → tủ, tái dùng kênh có sẵn):
 
-    Pi  ──TARGET_REQUEST──▶ backend           (khởi động, kết nối lại, định kỳ)
+    Pi  ──TARGET_REQUEST──▶ backend           (chỉ khi camera đang thấy một mã ArUco; có nhịp giãn)
     Pi  ◀─DELIVERY_TARGET── backend           missionId, orderId, lockerId, compartmentId,
                                               arucoMarkerId, arucoDictionary, mode
     camera thấy ĐÚNG mã ô đích ổn định N frame + T giây
@@ -10,16 +10,24 @@ Luồng (Pi → backend → MQTT → tủ, tái dùng kênh có sẵn):
     Pi  ◀─MARKER_VALIDATED  (backend đã kiểm và gửi lệnh mở cho tủ)
     Pi  ◀─LID_OPENING       (tủ đã NHẬN lệnh, nắp đang chạy)
     Pi  ◀─LID_OPENED        (tủ báo nắp đã mở; lidConfirmation = LIMIT_SWITCH | STEP_COUNT)
-    Pi  ◀─LID_OPEN_FAILED / MARKER_REJECTED / SAFETY_ABORT / DELIVERY_READY
+                            demo trong nhà: kèm dropSimulationSeconds = LỆNH NHẢ HÀNG — Pi giả lập
+                            nhả hàng đúng số giây đó (cấu hình admin) rồi:
+    Pi  ──DROP_PHASE_COMPLETED─▶ backend ──cabinet/{id}/command/close {lid:true}──▶ tủ
+    Pi  ◀─LID_CLOSING       (backend đã nhận báo cáo, tủ đang đóng nắp — thôi gửi lại báo cáo)
+    Pi  ◀─LID_OPEN_FAILED / LID_CLOSE_FAILED / MARKER_REJECTED / SAFETY_ABORT / DELIVERY_READY
 
 Quy tắc:
-  • Không có nhiệm vụ (chưa nhận DELIVERY_TARGET) ⇒ không gửi gì, dù camera thấy marker.
+  • Camera trống / quay xung quanh không thấy mã nào ⇒ không gửi bản tin nào lên hệ thống.
+  • Không có nhiệm vụ (chưa nhận DELIVERY_TARGET) ⇒ chỉ hỏi mục tiêu, không xin mở nắp, dù camera thấy marker.
   • Chỉ xét marker đúng ID và đúng từ điển của ô đích; marker khác trong cùng khung hình bị bỏ qua.
   • Phải thấy ổn định ít nhất `stable_frames` frame VÀ `stable_seconds` giây, mất dấu quá
     `lost_reset_s` thì đếm lại từ đầu.
   • Mỗi lần tiếp cận gửi MARKER_DETECTED MỘT lần; chỉ gửi lại khi backend không phản hồi sau
     `response_timeout_s`, tối đa `max_requests` lần (backend giữ nguyên phiên nếu đã có).
-  • Nhận diện và mở nắp KHÔNG điều khiển drone đáp hay nhả hàng — module này chỉ báo trạng thái.
+  • Nhận diện và mở nắp KHÔNG điều khiển drone đáp. Nhả hàng hiện là giả lập (chờ đủ số giây backend gửi);
+    LID_OPENED không kèm dropSimulationSeconds (giao ngoài trời) thì Pi không tự báo nhả hàng.
+  • Báo nhả hàng xong gửi lại mỗi `response_timeout_s` (tối đa `max_requests` lần) cho tới khi backend trả
+    LID_CLOSING / DELIVERY_READY.
 """
 from __future__ import annotations
 
@@ -39,7 +47,10 @@ STABILIZING = "STABILIZING"        # đang thấy đúng mã, chờ đủ số f
 REQUEST_SENT = "REQUEST_SENT"      # đã gửi MARKER_DETECTED, chờ backend
 VALIDATED = "VALIDATED"            # backend đã kiểm, đã gửi lệnh mở nắp cho tủ
 LID_OPENING = "LID_OPENING"        # tủ đã nhận lệnh, nắp đang chạy
-LID_OPEN = "LID_OPEN"              # tủ báo nắp đã mở
+LID_OPEN = "LID_OPEN"              # tủ báo nắp đã mở (không có lệnh nhả hàng giả lập)
+DROPPING = "DROPPING"              # nhận lệnh nhả hàng: đang giả lập nhả hàng trong số giây cấu hình
+DROP_REPORTED = "DROP_REPORTED"    # đã báo nhả hàng xong, chờ backend xác nhận
+LID_CLOSING = "LID_CLOSING"        # backend đã gửi lệnh đóng nắp, tủ đang đóng
 COMPLETED = "COMPLETED"            # hàng đã vào ô, nắp đã đóng
 FAILED = "FAILED"                  # lỗi; sau `cooldown_s` quay lại quét nếu còn nhiệm vụ
 
@@ -51,6 +62,9 @@ STATE_MESSAGES = {
     VALIDATED: "Hệ thống đã gửi lệnh mở nắp tới tủ",
     LID_OPENING: "Tủ đã nhận lệnh, nắp trượt đang mở",
     LID_OPEN: "Tủ báo nắp đã mở",
+    DROPPING: "Đang giả lập nhả hàng",
+    DROP_REPORTED: "Đã báo nhả hàng xong, chờ hệ thống",
+    LID_CLOSING: "Tủ đang đóng nắp",
     COMPLETED: "Đã giao xong — nắp đã đóng",
     FAILED: "Lỗi",
 }
@@ -95,6 +109,7 @@ class DeliveryTracker:
                  lid_timeout_s: float = 180.0, max_requests: int = 3, cooldown_s: float = 5.0,
                  exhausted_cooldown_s: float = 120.0,
                  target_poll_s: float = 10.0, target_refresh_s: float = 30.0,
+                 marker_recent_s: float = 2.0,
                  clock: Callable[[], float] = time.monotonic):
         self.drone_id = drone_id
         self.dictionary = dictionary          # từ điển camera đang dò
@@ -123,17 +138,24 @@ class DeliveryTracker:
         self._session_id = None
         self._correlation_id = None
         self._last_target_request = None
+        self._marker_seen_at = None
+        self.marker_recent_s = marker_recent_s
         self.lid_confirmation = None
         self.drop_simulation_s = None
+        self._drop_reports = 0
+        self._drop_report_due = False
         self.last_pose = None
 
     # ─── nhiệm vụ ───
 
     def due_target_request(self) -> Optional[dict]:
-        """Bản tin TARGET_REQUEST nếu đến lúc hỏi backend (chưa có nhiệm vụ: mỗi `target_poll_s`,
-        đang có: mỗi `target_refresh_s` để biết nhiệm vụ đã huỷ/xong)."""
+        """Bản tin TARGET_REQUEST nếu đến lúc hỏi backend. CHỈ hỏi khi camera vừa thấy một mã ArUco
+        (trong `marker_recent_s` giây) — camera trống / quay xung quanh thì không gửi gì. Đang thấy mã:
+        chưa có nhiệm vụ thì hỏi mỗi `target_poll_s`, đã có thì mỗi `target_refresh_s` (biết nhiệm vụ huỷ/xong)."""
         with self._lock:
             now = self._clock()
+            if self._marker_seen_at is None or now - self._marker_seen_at > self.marker_recent_s:
+                return None
             every = self.target_poll_s if self.target is None else self.target_refresh_s
             if self._last_target_request is not None and now - self._last_target_request < every:
                 return None
@@ -146,7 +168,7 @@ class DeliveryTracker:
             }
 
     def request_target_now(self) -> None:
-        """Kết nối (lại) broker: hỏi mục tiêu ngay ở vòng kế tiếp."""
+        """Kết nối (lại) broker: lần kế tiếp camera thấy mã ArUco thì hỏi mục tiêu ngay (không chờ nhịp)."""
         with self._lock:
             self._last_target_request = None
 
@@ -157,6 +179,8 @@ class DeliveryTracker:
         Trả bản tin MARKER_DETECTED cần gửi (đúng một lần mỗi lần tiếp cận), hoặc None."""
         with self._lock:
             now = self._clock()
+            if detections:
+                self._marker_seen_at = now   # có mã ArUco trong khung hình ⇒ được phép hỏi mục tiêu
             self._expire_waits(now)
             if self.target is None or self.state not in (SCANNING, STABILIZING):
                 return None
@@ -245,15 +269,21 @@ class DeliveryTracker:
             elif event == "LID_OPENING":
                 self._set(LID_OPENING)
             elif event == "LID_OPENED":
+                if self.state in (DROPPING, DROP_REPORTED, LID_CLOSING, COMPLETED):
+                    return None   # lệnh lặp (QoS 1): không giả lập nhả hàng lần nữa
                 self.lid_confirmation = cmd.get("lidConfirmation") or "LIMIT_SWITCH"
-                self.drop_simulation_s = cmd.get("dropSimulationSeconds")
-                text = cmd.get("errorMessage") or STATE_MESSAGES[LID_OPEN]
-                if self.drop_simulation_s:
-                    text += f" — giả lập drone nhả hàng {self.drop_simulation_s} giây"
-                self._set(LID_OPEN, text)
+                self._session_id = cmd.get("sessionId") or self._session_id
+                self._correlation_id = cmd.get("correlationId") or self._correlation_id
+                self._start_drop(cmd.get("dropSimulationSeconds"), cmd.get("errorMessage"))
+            elif event == "LID_CLOSING":
+                if self.state != COMPLETED:
+                    self._drop_report_due = False
+                    self._set(LID_CLOSING, cmd.get("errorMessage") or STATE_MESSAGES[LID_CLOSING])
             elif event == "DELIVERY_READY":
+                self._drop_report_due = False
                 self._set(COMPLETED, cmd.get("errorMessage") or STATE_MESSAGES[COMPLETED])
             elif event in ("LID_OPEN_FAILED", "LID_CLOSE_FAILED", "SAFETY_ABORT"):
+                self._drop_report_due = False
                 self._set(FAILED, f"{cmd.get('errorCode') or event}: {cmd.get('errorMessage') or ''}".strip())
             elif event == "MARKER_REJECTED":
                 self._set(FAILED, f"Hệ thống từ chối mã: {cmd.get('errorMessage') or ''}".strip())
@@ -272,13 +302,89 @@ class DeliveryTracker:
         self.target = target
         self._requests = 0
         self._exhausted = False
-        self._session_id = self._correlation_id = None
+        self._session_id = cmd.get("sessionId") or None
+        self._correlation_id = None
         self.lid_confirmation = self.drop_simulation_s = None
+        self._drop_report_due = False
         self._reset_stability()
-        resume = {"LID_OPENING": LID_OPENING, "LID_OPENED": LID_OPEN, "OPEN_LID_REQUESTED": VALIDATED,
-                  "CLOSE_LID_REQUESTED": LID_OPEN}.get(str(cmd.get("sessionState") or ""))
+        session_state = str(cmd.get("sessionState") or "")
+        if session_state == "LID_OPENED":
+            # Pi khởi động lại khi nắp đang mở chờ thả: backend nhắc lại lệnh nhả hàng (nếu là demo).
+            self._start_drop(cmd.get("dropSimulationSeconds"), None)
+            return
+        resume = {"LID_OPENING": LID_OPENING, "OPEN_LID_REQUESTED": VALIDATED,
+                  "CLOSE_LID_REQUESTED": LID_CLOSING}.get(session_state)
         self._set(resume or SCANNING, f"Nhiệm vụ đơn #{target.order_id}: tìm mã ArUco #{target.marker_id}"
                   if resume is None else None)
+
+    def _start_drop(self, seconds, lid_message: Optional[str]) -> None:
+        """Nắp đã mở. Có `seconds` (lệnh nhả hàng của demo) ⇒ giả lập nhả hàng chừng ấy giây rồi báo
+        DROP_PHASE_COMPLETED; không có ⇒ chỉ hiển thị nắp đã mở (giao ngoài trời, drone tự xử lý)."""
+        try:
+            seconds = float(seconds) if seconds is not None else None
+        except (TypeError, ValueError):
+            seconds = None
+        self.drop_simulation_s = seconds if seconds and seconds > 0 else None
+        self._drop_reports = 0
+        self._drop_report_due = False
+        if self.drop_simulation_s is None:
+            self._set(LID_OPEN, lid_message or STATE_MESSAGES[LID_OPEN])
+            return
+        log.info("Nhận lệnh nhả hàng: giả lập %.0f giây (session=%s)", self.drop_simulation_s, self._session_id)
+        self._set(DROPPING, f"Nắp đã mở — đang giả lập nhả hàng {self.drop_simulation_s:g} giây")
+
+    def due_drop_report(self) -> Optional[dict]:
+        """Bản tin DROP_PHASE_COMPLETED khi đã giả lập nhả hàng đủ số giây (và gửi lại nếu backend chưa
+        xác nhận sau `response_timeout_s`, tối đa `max_requests` lần). None nếu chưa tới lúc."""
+        with self._lock:
+            now = self._clock()
+            waited = now - self._entered_at
+            if self.target is None:
+                return None
+            if self.state == DROPPING and waited >= (self.drop_simulation_s or 0):
+                self._drop_report_due = True
+            elif self.state == DROP_REPORTED and waited >= self.response_timeout_s:
+                if self._drop_reports >= self.max_requests:
+                    self._set(FAILED, f"Hệ thống không xác nhận báo nhả hàng sau {self._drop_reports} lần gửi")
+                    return None
+                self._drop_report_due = True
+            if not self._drop_report_due:
+                return None
+            self._drop_report_due = False
+            self._drop_reports += 1
+            target = self.target
+            payload = {
+                "messageId": str(uuid.uuid4()),
+                "eventType": "DROP_PHASE_COMPLETED",
+                "droneId": self.drone_id,
+                "orderId": target.order_id,
+                "lockerId": target.locker_id,
+                "mode": target.mode,
+                "dropSimulationSeconds": self.drop_simulation_s,
+                "attempt": self._drop_reports,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if self._session_id:
+                payload["sessionId"] = self._session_id
+            if self._correlation_id:
+                payload["correlationId"] = self._correlation_id
+            if target.mission_id is not None:
+                payload["missionId"] = target.mission_id
+            if target.box_id is not None:
+                payload["compartmentId"] = target.box_id
+            log.info("DROP_PHASE_COMPLETED order=%s session=%s attempt=%d", target.order_id, self._session_id,
+                     self._drop_reports)
+            # _set đổi _entered_at kể cả khi gửi lại (cùng trạng thái) để hẹn giờ gửi lại tính từ lần này.
+            self._entered_at = now
+            self._set(DROP_REPORTED, f"Đã báo nhả hàng xong (lần {self._drop_reports}), chờ tủ đóng nắp")
+            return payload
+
+    def drop_report_failed(self) -> None:
+        """Không gửi được báo cáo (MQTT mất kết nối): thử lại ở vòng kế tiếp, không tính lượt."""
+        with self._lock:
+            if self.state == DROP_REPORTED:
+                self._drop_reports = max(0, self._drop_reports - 1)
+                self._drop_report_due = True
 
     def _clear_target(self, reason: str) -> None:
         if self.target is not None:

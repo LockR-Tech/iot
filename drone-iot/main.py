@@ -65,17 +65,18 @@ def main() -> int:
         target_poll_s=settings.target_poll_s,
     )
 
-    def publish_delivery(payload: dict) -> None:
+    def publish_delivery(payload: dict) -> bool:
         if publisher is None:
             print(json.dumps(payload, ensure_ascii=False), flush=True)
-            return
+            return True
         if publisher.publish_delivery_event(payload):
             log.info("Đã gửi %s (mission=%s order=%s locker=%s aruco=%s)", payload.get("eventType"),
                      payload.get("missionId"), payload.get("orderId"), payload.get("lockerId"),
                      payload.get("arucoMarkerId"))
-        else:
-            log.warning("Không gửi được %s (MQTT chưa kết nối) — sẽ thử lại theo hẹn giờ",
-                        payload.get("eventType"))
+            return True
+        log.warning("Không gửi được %s (MQTT chưa kết nối) — sẽ thử lại theo hẹn giờ",
+                    payload.get("eventType"))
+        return False
 
     # Khởi động camera streamer ngầm tích hợp ArUco Vision (phát tại /stream.mjpg và /api/status)
     camera_server = None
@@ -106,6 +107,14 @@ def main() -> int:
                 request = tracker.due_target_request()
                 if request:
                     publish_delivery(request)
+                # Lệnh nhả hàng (demo): giả lập đủ số giây cấu hình rồi báo backend đã nhả xong.
+                report = tracker.due_drop_report()
+                if report and not publish_delivery(report):
+                    tracker.drop_report_failed()
+            elif publisher is None:
+                report = tracker.due_drop_report()
+                if report:
+                    publish_delivery(report)
             sequence += 1
             snapshot = state.snapshot()
             payload = build_payload(

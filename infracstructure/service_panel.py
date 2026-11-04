@@ -251,6 +251,16 @@ class ServicePanel:
         return self._log(f"Trục {axis} chạy {revolutions:g} vòng {label}",
                          lid.run_async("jog", revolutions=revolutions, toward_end=direction == "open"))
 
+    def set_position(self, axis: int, revolutions: Optional[float]) -> dict:
+        """Hiệu chỉnh vị trí bàn trượt (tủ chưa có công tắc hành trình): người đứng tủ báo bàn đang ở đâu."""
+        lid = self._lid(axis)
+        if not hasattr(lid, "set_position"):
+            raise ValueError("Trục này không hỗ trợ đặt vị trí")
+        status = lid.set_position(revolutions)
+        where = "chưa biết" if revolutions is None else f"cách gốc {revolutions:g} vòng"
+        self._log(f"Trục {axis}: đặt vị trí bàn trượt {where}", {"result": "OK"})
+        return status
+
     def tune(self, axis: int, changes: dict) -> dict:
         lid = self._lid(axis)
         config = lid.tune(**changes)
@@ -381,6 +391,10 @@ class JogRequest(BaseModel):
     direction: str
 
 
+class PositionRequest(BaseModel):
+    revolutions: Optional[float] = None   # vòng cách gốc; None = không biết
+
+
 class TuningRequest(BaseModel):
     rps: Optional[float] = None
     start_rps: Optional[float] = None
@@ -390,6 +404,7 @@ class TuningRequest(BaseModel):
     steps_per_rev: Optional[int] = None
     open_dir_high: Optional[bool] = None
     limit_active_low: Optional[bool] = None
+    profile: Optional[str] = None          # "linear" | "chaydan" (lệnh tăng tốc dần của kỹ thuật tủ)
 
 
 def require_local_same_origin(request: Request):
@@ -438,6 +453,10 @@ def create_service_router(panel: ServicePanel) -> APIRouter:
     @router.post("/api/lids/{axis}/jog")
     def jog(axis: int, req: JogRequest):
         return _call(panel.jog, axis, req.revolutions, req.direction)
+
+    @router.put("/api/lids/{axis}/position")
+    def set_position(axis: int, req: PositionRequest):
+        return _call(panel.set_position, axis, req.revolutions)
 
     @router.put("/api/lids/{axis}/tuning")
     def tune(axis: int, req: TuningRequest):

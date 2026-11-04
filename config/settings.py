@@ -121,6 +121,9 @@ class Settings:
 
     # Tốc độ/xung chỉnh trên bảng điều khiển kỹ thuật, ghi đè LID_* (riêng từng Pi, không commit).
     LID_TUNING_FILE = os.getenv("LID_TUNING_FILE", str(Path(__file__).parent / "lid_tuning.json"))
+    # Vị trí bàn trượt (vòng cách gốc) theo đếm bước — chỉ dùng khi chưa có công tắc hành trình
+    # (LID_REQUIRE_LIMIT_SWITCH=false); giữ qua khởi động lại để Mở/Đóng chỉ chạy phần còn thiếu tới đầu ray.
+    LID_POSITION_FILE = os.getenv("LID_POSITION_FILE", str(Path(__file__).parent / "lid_position.json"))
     # Bản đồ chân admin sửa trên web (lệnh hw-config) — ghi đè `.env`, xem config/hardware_config.py.
     HARDWARE_CONFIG_FILE = os.getenv("HARDWARE_CONFIG_FILE", str(Path(__file__).parent / "hardware_config.json"))
     # Script root cập nhật dòng `gpio=…=op,dl` (relay về mức thấp lúc khởi động) và ExecStopPost khi đổi chân relay.

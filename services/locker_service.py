@@ -348,7 +348,7 @@ class LockerService:
             return self._publish_cmd_result(cab, "lid-tune", command_id, "FAILED",
                 {"axis": axis, "errorCode": "AXIS_DISABLED", "errorMessage": f"Trục {axis} chưa bật trên Pi"})
         allowed = {"rps", "start_rps", "ramp_steps", "pulse_us", "max_revs",
-                   "steps_per_rev", "open_dir_high", "limit_active_low"}
+                   "steps_per_rev", "open_dir_high", "limit_active_low", "profile"}
         changes = {k: v for k, v in (data.get("changes") or {}).items() if k in allowed and v is not None}
         try:
             config = lid.tune(**changes)
@@ -561,10 +561,12 @@ class LockerService:
         logger.warning(f"🚀 SLIDING LID {action.upper()} REQUEST: locker={cabinet_id}, slot={slot_index}, "
                        f"box={box_id}, cmdId={command_id}")
         if getattr(settings, "LID_BYPASS_PHYSICAL_MOTION", False):
-            logger.info("⚡ LID_BYPASS_PHYSICAL_MOTION: chỉ báo kết quả, không trượt nắp cơ học.")
-            return finish("SUCCESS", target, None, f"(Giả lập — hardware bypass) báo nắp đã {verb}, nắp KHÔNG trượt",
-                          {"lidConfirmation": "BYPASS"})
+            # Cờ giả lập cũ: không còn chặn motor. Lệnh nắp drone luôn trượt thật, đúng như nút
+            # "Mở hết / Đóng hết" ở trang Điều khiển tủ (cùng gọi LidController.open/close).
+            logger.warning("LID_BYPASS_PHYSICAL_MOTION đang bật nhưng bị bỏ qua — nắp drone luôn trượt thật")
 
+        # Cùng lời gọi với lệnh "Mở hết / Đóng hết" (cabinet/{id}/command/lid): chưa có công tắc hành trình thì
+        # chạy phần còn thiếu tới đầu ray theo vị trí đếm bước (cả ray 36 vòng nếu chưa biết vị trí).
         result = lid.open() if action == "open" else lid.close()
         step_count_only = (result.get("error") == "LIMIT_NOT_REACHED"
                            and not settings.LID_REQUIRE_LIMIT_SWITCH)
@@ -574,12 +576,21 @@ class LockerService:
             return finish("FAILED", (lid.status() or {}).get("state", LockerHwState.UNKNOWN.value), error_code,
                           f"{verb.capitalize()} nắp trượt ô tủ thất bại: {error_code}")
         reached_limit = bool(limit_check()) if callable(limit_check) else bool(limit_check)
+        if step_count_only and hasattr(lid, "assume_reached"):
+            # Chạy hết số vòng giới hạn (vd. trục 1: 36 vòng = hết ray) ⇒ coi nắp đã tới đích.
+            lid.assume_reached(action == "open")
         if not reached_limit and settings.LID_REQUIRE_LIMIT_SWITCH:
             return finish("FAILED", LockerHwState.UNKNOWN.value, "LIMIT_NOT_REACHED",
                           f"Nắp chạy hết số bước nhưng không chạm công tắc hành trình — chưa xác nhận đã {verb}")
-        message = (f"Nắp trượt ô tủ đã {verb} hoàn toàn (công tắc hành trình)" if reached_limit else
-                   f"Nắp đã chạy hết hành trình theo số bước — chưa có công tắc hành trình xác nhận đã {verb}")
-        return finish("SUCCESS", target, None, message, {"lidConfirmation": confirmation(reached_limit)})
+        spr = (lid.config() or {}).get("steps_per_rev") if hasattr(lid, "config") else None
+        revs = round(result.get("steps", 0) / spr, 2) if spr else None
+        moved = f" ({revs:g} vòng)" if revs is not None else ""
+        message = (f"Nắp trượt ô tủ đã {verb} hoàn toàn (công tắc hành trình){moved}" if reached_limit else
+                   f"Nắp đã chạy hết hành trình theo số bước{moved} — chưa có công tắc hành trình xác nhận đã {verb}")
+        extra = {"lidConfirmation": confirmation(reached_limit)}
+        if revs is not None:
+            extra["revolutions"] = revs
+        return finish("SUCCESS", target, None, message, extra)
 
     def _handle_open_command(self, cab: dict, data: dict):
         """Topic: cabinet/{lockerId}/command/open"""

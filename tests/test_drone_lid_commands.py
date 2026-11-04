@@ -100,6 +100,48 @@ class DroneLidCommandTest(unittest.TestCase):
         self.assertEqual(last["lidConfirmation"], "STEP_COUNT")
         self.assertIn("chưa có công tắc hành trình", last["errorMessage"])
 
+    def test_full_step_count_run_is_remembered_so_the_next_open_does_not_push_the_lid_again(self):
+        # Chưa có công tắc hành trình: chạy hết số vòng giới hạn = tới đích (hết ray), không để FAULT.
+        self.send("open", "drone-full-1")
+        self.assertEqual(self.lid.status()["state"], "OPEN")
+        pulses = self.motor_pulses()
+
+        self.send("open", "drone-full-2")          # lệnh mở khác khi nắp đã mở hết
+        self.assertEqual(self.motor_pulses(), pulses, "nắp đã mở hết mà vẫn đẩy thêm một lượt")
+        self.assertTrue(self.results("open", "drone-full-2")[-1].get("alreadyInPosition"))
+
+        self.send("close", "drone-full-3")         # đóng vẫn chạy thật, rồi ghi nhận đã đóng
+        self.assertGreater(self.motor_pulses(), pulses)
+        self.assertEqual(self.results("close", "drone-full-3")[-1]["hwState"], "CLOSED")
+        self.assertEqual(self.lid.status()["state"], "CLOSED")
+
+    def test_position_tracked_lid_slides_only_the_missing_travel_then_closes_fully(self):
+        # Tủ CAB-TU01: không công tắc, Pi đếm bước. Bàn trượt cách gốc 1 vòng (ray 4 vòng trong test).
+        lid = LidController(self.lid_pins, pul_pin=PUL, dir_pin=DIR, home_pin=HOME, end_pin=END,
+                            steps_per_sec=50_000, start_steps_per_sec=50_000, ramp_steps=0,
+                            max_steps=400, pulse_us=0, steps_per_rev=100, position_travel=True,
+                            step_active_low=False)
+        self.service.lids = {1: lid}
+        self.lid.shutdown()
+        lid.start()
+        lid.set_position(1)
+        before = self.motor_pulses()
+
+        self.send("open", "track-1")
+        opened = self.results("open", "track-1")[-1]
+        self.assertEqual(opened["status"], "SUCCESS")
+        self.assertEqual(opened["revolutions"], 3, "chỉ chạy 3 vòng còn thiếu tới cuối ray")
+        self.assertEqual(self.motor_pulses() - before, 300)
+
+        self.send("open", "track-2")               # lệnh mở khác khi nắp đã mở hết: không chạy motor
+        self.assertTrue(self.results("open", "track-2")[-1].get("alreadyInPosition"))
+        self.assertEqual(self.motor_pulses() - before, 300)
+
+        self.send("close", "track-3")
+        closed = self.results("close", "track-3")[-1]
+        self.assertEqual((closed["status"], closed["hwState"], closed["revolutions"]), ("SUCCESS", "CLOSED", 4))
+        lid.shutdown()
+
     def test_limit_switch_reached_is_reported_as_confirmed(self):
         # Công tắc cuối hành trình đã chạm (mức thấp, active-low) ⇒ xác nhận bằng công tắc.
         self.lid_pins.levels[END] = False
@@ -178,13 +220,15 @@ class DroneLidCommandTest(unittest.TestCase):
         self.assertEqual(result["errorCode"], "LIMIT_NOT_REACHED")
         self.assertEqual(self.motor_pulses(), 0)
 
-    def test_bypass_mode_says_so_instead_of_claiming_a_real_open(self):
+    def test_old_bypass_flag_no_longer_fakes_the_drone_lid(self):
+        # Lệnh nắp drone chạy y như "Mở hết" ở trang Điều khiển tủ — cờ giả lập cũ không chặn motor nữa.
         with mock.patch.object(settings, "LID_BYPASS_PHYSICAL_MOTION", True):
             self.send("open", "drone-6d")
 
         last = self.results("open", "drone-6d")[-1]
-        self.assertEqual(last["lidConfirmation"], "BYPASS")
-        self.assertEqual(self.motor_pulses(), 0)
+        self.assertEqual(last["status"], "SUCCESS")
+        self.assertNotEqual(last["lidConfirmation"], "BYPASS")
+        self.assertGreater(self.motor_pulses(), 0)
 
     def test_close_retry_is_idempotent_too_and_close_ignores_expiry(self):
         self.send("open", "drone-7-open")
