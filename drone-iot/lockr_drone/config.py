@@ -21,6 +21,10 @@ def _float(name: str, default: float) -> float:
     return float(os.getenv(name, default))
 
 
+def _bool(name: str, default: bool) -> bool:
+    return os.getenv(name, "true" if default else "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     # Mã drone trên admin Lock.R (drone_units.code) — nằm trong topic MQTT.
@@ -57,6 +61,14 @@ class Settings:
     delivery_max_requests: int = 3            # số lần gửi MARKER_DETECTED tối đa mỗi lần tiếp cận
     delivery_lid_timeout_s: float = 180.0     # chờ tủ báo nắp đã mở sau khi backend đã gửi lệnh
     target_poll_s: float = 10.0               # chưa có nhiệm vụ: hỏi backend mỗi chừng này giây
+    # ─── Servo nhả hàng (xem release.py; đấu nối ở servo.py) ───
+    servo_release_enabled: bool = False       # tắt ⇒ đơn DEMO giả lập nhả hàng như trước, giao thật báo lỗi
+    servo_gpio_pin: int = 18                  # BCM; 18 = chân vật lý 12
+    servo_open_angle: float = 180.0           # góc mở chốt thả kiện (mở hết hành trình)
+    servo_lock_angle: float = 0.0             # góc khoá chốt giữ kiện
+    servo_hold_s: float = 5.0                 # giữ chốt mở chừng này giây cho kiện rơi
+    servo_move_s: float = 0.8                 # cấp xung mỗi lần quay chừng này giây rồi ngắt (chống rung, nóng)
+    servo_release_attempts: int = 2           # lỗi trước khi chốt mở: thử tổng cộng chừng này lần
 
     @staticmethod
     def from_env() -> "Settings":
@@ -86,6 +98,13 @@ class Settings:
             delivery_max_requests=int(os.getenv("DELIVERY_MAX_REQUESTS", 3)),
             delivery_lid_timeout_s=_float("DELIVERY_LID_TIMEOUT_S", 180),
             target_poll_s=_float("TARGET_POLL_S", 10),
+            servo_release_enabled=_bool("SERVO_RELEASE_ENABLED", False),
+            servo_gpio_pin=int(os.getenv("SERVO_GPIO_PIN", 18)),
+            servo_open_angle=_float("SERVO_OPEN_ANGLE", 180),
+            servo_lock_angle=_float("SERVO_LOCK_ANGLE", 0),
+            servo_hold_s=_float("SERVO_HOLD_S", 5),
+            servo_move_s=_float("SERVO_MOVE_S", 0.8),
+            servo_release_attempts=int(os.getenv("SERVO_RELEASE_ATTEMPTS", 2)),
         )
 
     def problems(self, mqtt: bool = True) -> list[str]:
@@ -103,4 +122,10 @@ class Settings:
                 problems.append("cần DEVICE_KEY (ký bản tin) hoặc tài khoản broker riêng")
             if self.mqtt_password and not self.mqtt_tls:
                 problems.append("có MQTT_PASSWORD thì phải bật MQTT_TLS")
+        if self.servo_release_enabled:
+            for name, angle in (("SERVO_OPEN_ANGLE", self.servo_open_angle), ("SERVO_LOCK_ANGLE", self.servo_lock_angle)):
+                if not 0 <= angle <= 180:
+                    problems.append(f"{name} phải trong 0..180 độ")
+            if self.servo_open_angle == self.servo_lock_angle:
+                problems.append("SERVO_OPEN_ANGLE và SERVO_LOCK_ANGLE trùng nhau — chốt sẽ không mở")
         return problems
