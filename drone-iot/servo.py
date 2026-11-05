@@ -11,6 +11,7 @@ Sơ đồ đấu nối:
 
 Các lệnh chạy trên Pi qua SSH:
     python3 ~/servo.py loop        # xoay qua lại liên tục (0° -> 90° -> 180° -> 90°...), Ctrl+C để dừng
+    python3 ~/servo.py flip        # quay hết hành trình liên tục (0° -> 180° -> 0° -> 180°...), Ctrl+C để dừng
     python3 ~/servo.py sweep       # quét mượt liên tục từng góc từ 0° <-> 180°, Ctrl+C để dừng
     python3 ~/servo.py spin        # cấp xung quay liên tục 1 chiều (cho servo 360°), Ctrl+C để dừng
     python3 ~/servo.py stop        # dừng xoay và ngắt xung PWM ngay lập tức
@@ -19,6 +20,7 @@ Các lệnh chạy trên Pi qua SSH:
     python3 ~/servo.py open        # mở chốt (110°)
     python3 ~/servo.py close       # đóng chốt (0°)
     python3 ~/servo.py 90          # xoay tới góc bất kỳ (0..180)
+    python3 ~/servo.py flip --min-us 400 --max-us 2600   # nới xung nếu servo chưa quay hết hành trình
 """
 from __future__ import annotations
 
@@ -101,8 +103,13 @@ def stop_servo(pin: int = DEFAULT_GPIO_PIN) -> None:
         print(f"[SERVO] Đã dừng và ngắt xung PWM trên GPIO{pin} (chân 12).")
 
 
-def loop_servo(pin: int = DEFAULT_GPIO_PIN, step_s: float = 0.8, count: int = 0) -> None:
-    """Xoay qua lại liên tục 0° -> 90° -> 180° -> 90° (bấm Ctrl+C để dừng)."""
+def loop_servo(
+    pin: int = DEFAULT_GPIO_PIN,
+    step_s: float = 0.8,
+    count: int = 0,
+    angles: tuple[float, ...] = (0.0, 90.0, 180.0, 90.0),
+) -> None:
+    """Xoay lần lượt qua các góc `angles` rồi lặp lại (mặc định 0° -> 90° -> 180° -> 90°), Ctrl+C để dừng."""
     _kill_other_servo_processes()
     lgpio, handle, chip_num = _open_lgpio_chip(pin)
     if handle is None:
@@ -117,7 +124,6 @@ def loop_servo(pin: int = DEFAULT_GPIO_PIN, step_s: float = 0.8, count: int = 0)
     signal.signal(signal.SIGINT, _on_sig)
     signal.signal(signal.SIGTERM, _on_sig)
 
-    angles = (0.0, 90.0, 180.0, 90.0)
     print(f"[SERVO] Đang xoay qua lại liên tục trên GPIO{pin} (chip={chip_num}). Bấm Ctrl+C để dừng...")
     cycle = 0
     try:
@@ -348,22 +354,32 @@ def drop_payload(
 
 
 def main() -> int:
+    global MIN_PULSE_US, MAX_PULSE_US
     parser = argparse.ArgumentParser(description="Điều khiển Servo MG996R trên Raspberry Pi 5 (GPIO18 - Chân 12)")
     parser.add_argument(
         "command",
         nargs="?",
         default="loop",
-        help="Lệnh: 'loop'/'xoay' (xoay qua lại liên tục), 'sweep' (quét mượt liên tục), 'spin' (cấp xung liên tục), 'test', 'drop', 'open', 'close', 'stop', hoặc góc (0..180)",
+        help="Lệnh: 'loop'/'xoay' (xoay qua lại liên tục), 'flip' (0° <-> 180° liên tục), 'sweep' (quét mượt liên tục), 'spin' (cấp xung liên tục), 'test', 'drop', 'open', 'close', 'stop', hoặc góc (0..180)",
     )
     parser.add_argument("--pin", type=int, default=DEFAULT_GPIO_PIN, help="Chân GPIO theo chuẩn BCM (mặc định: 18 = chân vật lý 12)")
     parser.add_argument("--hold", type=float, default=0.8, help="Thời gian giữ mỗi góc (giây, mặc định 0.8s)")
     parser.add_argument("--wait", type=float, default=2.0, help="Thời gian chờ hàng rơi khi chạy lệnh 'drop' (giây)")
-    parser.add_argument("--count", type=int, default=0, help="Số vòng lặp khi chạy 'loop' (0 = xoay mãi tới khi Ctrl+C)")
+    parser.add_argument("--min-us", type=float, default=MIN_PULSE_US, help="Độ rộng xung ở 0° (µs, mặc định 500)")
+    parser.add_argument("--max-us", type=float, default=MAX_PULSE_US, help="Độ rộng xung ở 180° (µs, mặc định 2500)")
+    parser.add_argument("--count", type=int, default=0, help="Số vòng lặp khi chạy 'loop'/'flip' (0 = xoay mãi tới khi Ctrl+C)")
     args = parser.parse_args()
+
+    # Mỗi con MG996R lệch một chút: nới xung để quay hết hành trình, nhưng servo kêu rè ở hai đầu là đã tì vào
+    # chặn cơ khí — thu lại kẻo cháy.
+    MIN_PULSE_US = max(300.0, args.min_us)
+    MAX_PULSE_US = min(2700.0, args.max_us)
 
     cmd = args.command.strip().lower()
     if cmd in ("loop", "xoay"):
         loop_servo(pin=args.pin, step_s=args.hold, count=args.count)
+    elif cmd in ("flip", "0-180"):
+        loop_servo(pin=args.pin, step_s=args.hold, count=args.count, angles=(0.0, 180.0))
     elif cmd == "sweep":
         sweep_servo(pin=args.pin)
     elif cmd in ("spin", "360"):
@@ -387,7 +403,7 @@ def main() -> int:
             angle = float(cmd)
         except ValueError:
             print(
-                f"Lệnh không hợp lệ: {args.command}. Dùng góc 0..180 hoặc: loop | xoay | sweep | spin | test | drop | open | close | stop",
+                f"Lệnh không hợp lệ: {args.command}. Dùng góc 0..180 hoặc: loop | xoay | flip | sweep | spin | test | drop | open | close | stop",
                 file=sys.stderr,
             )
             return 2
