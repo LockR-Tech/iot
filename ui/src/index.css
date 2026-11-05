@@ -1133,3 +1133,148 @@ html, body, #root {
 }
 
 
+
+/* ─── Hộp thoại kiosk (thay alert/confirm của trình duyệt) ─── */
+.modal-overlay.kiosk-dialog-overlay { z-index: 2000; align-items: center; animation: dialogFade 0.18s ease-out; }
+@keyframes dialogFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialogPop { from { opacity: 0; transform: translateY(12px) scale(0.96); } to { opacity: 1; transform: none; } }
+.kiosk-dialog {
+  width: 100%; max-width: 420px; margin: auto;
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px;
+  padding: 28px 26px 22px; border-radius: 24px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  box-shadow: 0 30px 60px rgba(15, 23, 42, 0.25);
+  animation: dialogPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.kiosk-dialog-icon {
+  width: 64px; height: 64px; border-radius: 20px; margin-bottom: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.kiosk-dialog.tone-info .kiosk-dialog-icon { background: var(--accent-dim); color: var(--accent); }
+.kiosk-dialog.tone-success .kiosk-dialog-icon { background: rgba(16,185,129,0.12); color: #059669; }
+.kiosk-dialog.tone-warn .kiosk-dialog-icon { background: rgba(245,158,11,0.14); color: #d97706; }
+.kiosk-dialog.tone-error .kiosk-dialog-icon { background: rgba(239,68,68,0.12); color: #dc2626; }
+.kiosk-dialog h3 { margin: 0; font-size: 19px; font-weight: 800; color: var(--text-primary); }
+.kiosk-dialog p { margin: 0; font-size: 15px; line-height: 1.55; color: var(--text-secondary); }
+.kiosk-dialog-actions { display: flex; gap: 10px; width: 100%; margin-top: 12px; }
+.kiosk-dialog-actions .btn { flex: 1; min-height: 50px; border-radius: 14px; font-size: 15px; }
+
+/* ─── Trang chủ: nút tròn báo sự cố (góc dưới khung trái) ─── */
+.home-left { position: relative; }
+.home-report-fab {
+  position: absolute; left: 20px; bottom: 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.home-report-fab-circle {
+  width: 62px; height: 62px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #fff; border: 1px solid rgba(239, 68, 68, 0.22);
+  box-shadow: 0 8px 20px rgba(239, 68, 68, 0.18);
+  transition: var(--transition);
+}
+.home-report-fab:hover .home-report-fab-circle, .home-report-fab:active .home-report-fab-circle { transform: scale(1.07); box-shadow: 0 12px 26px rgba(239, 68, 68, 0.28); }
+.home-report-fab-lottie { width: 46px; height: 46px; }
+.home-report-fab-label { font-size: 11.5px; font-weight: 700; color: #b91c1c; }
+.login-purpose { display: flex; align-items: center; gap: 8px; margin: -6px 0 14px; padding: 10px 14px; border-radius: 12px; background: rgba(239,68,68,0.07); color: #b91c1c; font-size: 13.5px; }
+
+/* ─── Màn báo ô tủ hư ─── */
+.report-step { display: flex; flex-direction: column; gap: 10px; }
+.report-step-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: var(--text-primary); }
+.report-step-title span { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; font-size: 12px; }
+.report-whole {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px; cursor: pointer;
+  background: var(--bg-card); border: 2px solid var(--border); font-size: 13.5px; font-weight: 700; color: var(--text-secondary); transition: var(--transition);
+}
+.report-whole.active { border-color: #ef4444; background: rgba(239,68,68,0.08); color: #b91c1c; }
+.report-reasons { display: flex; flex-wrap: wrap; gap: 8px; }
+.report-reason {
+  padding: 8px 12px; border-radius: 999px; cursor: pointer;
+  background: var(--bg-card); border: 1.5px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text-secondary); transition: var(--transition);
+}
+.report-reason.active { border-color: #ef4444; background: #ef4444; color: #fff; }
+.report-detail { resize: none; padding: 10px 14px; font-size: 14px; border-radius: 12px; font-family: inherit; }
+.report-locker { align-self: stretch; display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; font-weight: 700; color: var(--text-secondary); }
+.box-item.report-box { border-color: var(--border); }
+.box-item.report-box .box-status { background: var(--bg-card-hover); color: var(--text-muted); }
+.box-item.report-box.reported { border-color: rgba(239,68,68,0.35); }
+.box-item.report-box.reported .box-status { background: rgba(239,68,68,0.12); color: #dc2626; }
+.box-item.report-box.selected { border-color: #ef4444; background: linear-gradient(180deg, rgba(239,68,68,0.10) 0%, rgba(239,68,68,0.22) 100%); color: #b91c1c; box-shadow: 0 14px 28px rgba(239,68,68,0.22); }
+.box-item.report-box.selected .box-icon { color: #ef4444; }
+
+/* ─── Vừa khung 1024×600 (màn 7" của tủ) ─────────────────── */
+.screen { padding: 16px 28px; }
+.header { margin-bottom: 14px; padding-bottom: 12px; }
+.header h2 { font-size: 18px; }
+
+/* Chọn ô / báo hỏng: cột trái gọn lại để thấy nút, sơ đồ chia đều chiều cao */
+.boxes-layout { gap: 20px; }
+.boxes-side { gap: 10px; }
+.boxes-locker { padding: 12px 14px; gap: 6px; }
+.boxes-locker-name { font-size: 15px; }
+.boxes-locker-address { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.box-legend { gap: 6px 10px; font-size: 12px; }
+.box-picked { padding: 10px 12px; font-size: 13px; }
+.boxes-side > .btn { min-height: 52px; flex-shrink: 0; }
+.boxes-main { padding: 12px; }
+.boxes-main .box-grid { padding: 4px; }
+.boxes-main .box-grid.by-layout { gap: 10px; grid-template-rows: repeat(var(--rows, 1), minmax(54px, 1fr)); }
+.box-grid.by-layout .box-item { gap: 2px; padding: 4px; }
+.box-grid.by-layout .box-icon svg { width: 20px; height: 20px; }
+.box-grid.by-layout .box-number { font-size: 16px; }
+.box-grid.by-layout .box-status { font-size: 11px; padding: 1px 8px; }
+.box-item.selected { transform: translateY(-2px) scale(1.01); }
+.box-item:hover { transform: translateY(-2px); }
+
+/* Báo hỏng */
+.report-step { gap: 8px; }
+.report-reasons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.report-reason { padding: 7px 8px; border-radius: 10px; font-size: 12.5px; line-height: 1.3; text-align: center; }
+.report-detail { min-height: 40px; padding: 8px 12px; }
+.report-locker { justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.report-locker > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-locker .report-whole { flex-shrink: 0; padding: 6px 12px; font-size: 12.5px; }
+
+/* Đặt tủ: ghi chú + mã giảm giá chung một hàng */
+.order-form { gap: 12px; }
+.order-block { padding: 14px 16px; gap: 10px; }
+.order-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.order-row-2 .order-block { height: 100%; }
+.order-block .input { padding: 10px 14px; font-size: 14px; min-height: 46px; }
+.promo-btn.btn { padding: 0 14px; font-size: 14px; min-height: 46px; }
+.hour-option { padding: 8px 6px; }
+.duration-stepper button, .duration-stepper-value { height: 44px; }
+.order-summary { padding: 16px; gap: 12px; }
+.order-summary-total strong { font-size: 24px; }
+
+/* Thành công: 1 cột khi chỉ có lời nhắn, 2 cột khi có thẻ mã */
+.screen.success-screen {
+  justify-content: safe center; align-items: center; text-align: center;
+  background: radial-gradient(circle at 50% 30%, rgba(52, 211, 153, 0.12) 0%, var(--bg) 70%);
+}
+.success-screen.has-card { flex-direction: row; gap: 32px; }
+.success-main { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 400px; }
+.success-screen .lottie-success-wrap { width: 120px; height: 120px; margin: 0 auto 10px; }
+.success-screen.has-card .lottie-success-wrap { width: 104px; height: 104px; }
+.success-title { margin: 0 0 6px; font-size: 26px; font-weight: 800; color: var(--text-primary); }
+.success-msg { margin: 0; font-size: 14.5px; line-height: 1.5; color: var(--text-secondary); }
+.success-actions { margin-top: 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; max-width: 300px; }
+.success-actions .btn { min-height: 52px; font-size: 16px; }
+.success-actions .countdown { margin: 0; font-size: 13px; }
+.extra-card.success-card {
+  margin: 0; width: 100%; max-width: 420px; padding: 16px 18px; gap: 10px;
+  background: #fff; border-radius: 20px; box-shadow: 0 16px 40px rgba(0,0,0,0.06); text-align: left;
+}
+.success-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); font-size: 14px; }
+.success-row span { color: var(--text-muted); }
+.success-row strong { font-size: 15px; color: var(--text-primary); }
+.success-row strong.box { font-size: 22px; font-weight: 900; color: var(--success); }
+.success-pin { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); }
+.success-card .pin-notice.compact { padding: 12px; gap: 8px; }
+.success-card .pin-notice.compact .pin-notice-code { font-size: 26px; padding: 8px 20px; }
+
+/* Bàn phím ảo mở (VirtualKeyboard thêm .osk-open + cuộn .screen để ô nhập nổi trên bàn phím):
+   bố cục 2 cột giữ nguyên chiều cao thay vì co lại theo padding-bottom, cả màn cuộn được. */
+.osk-open .screen.screen-boxes, .osk-open .screen.screen-order { overflow-y: auto; }
+.osk-open .boxes-layout, .osk-open .order-layout { flex: 0 0 auto; height: 450px; }
+.success-row:last-child { border-bottom: 0; padding-bottom: 0; }

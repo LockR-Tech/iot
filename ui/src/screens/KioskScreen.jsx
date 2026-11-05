@@ -7,7 +7,7 @@ import {
   Unlock, Home, Loader2, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X,
   Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical,
-  CalendarDays, Minus, Plus
+  CalendarDays, Minus, Plus, Info, XCircle, Wrench, Send
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import boxStack3d from '../assets/illustrations/box_stack_3d.png';
@@ -16,6 +16,8 @@ import deliveryAnimation from '../assets/illustrations/delivery_animation.json';
 // Cùng minh hoạ drone 3D với thẻ đơn giao hàng trong app mobile (AppLottieAssets.drone).
 import drone3dAnimation from '../assets/illustrations/drone_3d.json';
 import lockrLogo from '../assets/logo.png';
+// Icon "Báo sự cố" 3D của app mobile (AppLottieAssets.baoSuCo).
+import baoSuCo3dAnimation from '../assets/illustrations/bao_su_co_3d.json';
 import LottieAnimation from '../components/LottieAnimation';
 
 
@@ -53,6 +55,10 @@ export default function KioskScreen() {
   const [successExtra, setSuccessExtra] = useState(null);
   const [countdown, setCountdown] = useState(0);
   const [lockerInfo, setLockerInfo] = useState(null);
+  // Đăng nhập xong đi đâu: 'boxes' (gửi đồ / thuê tủ) hay 'report' (báo ô tủ hư).
+  const [afterLogin, setAfterLogin] = useState('boxes');
+  // Ô chọn sẵn khi mở màn báo hỏng từ hộp "Quản lý ô" (null = khách tự chọn trên sơ đồ).
+  const [reportBoxId, setReportBoxId] = useState(null);
   const cdRef = useRef(null);
 
   // Fetch list of all lockers for dropdown
@@ -120,6 +126,7 @@ export default function KioskScreen() {
     setJwt(''); setEmail(''); setPhone(''); setLoginMethod('phone'); setTempToken(''); setUserName('');
     setSelectedBox(null); setOrderId(null);
     setOrderPin(''); setOrderCode(''); setTotalPrice(0);
+    setAfterLogin('boxes'); setReportBoxId(null);
     setScreen('home'); setHistory(['home']);
     if (cdRef.current) clearInterval(cdRef.current);
   }, []);
@@ -129,7 +136,8 @@ export default function KioskScreen() {
     setSuccessMsg(msg);
     setSuccessExtra(extra);
     go('success');
-    let sec = AUTO_HOME_SEC;
+    // Màn có mã mở ô: để lâu hơn cho khách kịp ghi / chụp lại mã.
+    let sec = extra?.orderPin ? AUTO_HOME_SEC * 2 : AUTO_HOME_SEC;
     setCountdown(sec);
     if (cdRef.current) clearInterval(cdRef.current);
     cdRef.current = setInterval(() => {
@@ -141,16 +149,18 @@ export default function KioskScreen() {
 
   return (
     <div className="kiosk-wrap">
-      {screen === 'home' && <HomeScreen go={go} lockerInfo={lockerInfo} activeLockerId={activeLockerId} setActiveLockerId={setActiveLockerId} allLockers={allLockers} />}
-      {screen === 'login' && <LoginScreen go={go} goHome={goHome} email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} loginMethod={loginMethod} setLoginMethod={setLoginMethod} />}
-      {screen === 'otp' && <OtpScreen go={go} back={back} email={email} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
-      {screen === 'phone-otp' && <PhoneOtpScreen go={go} back={back} phone={phone} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
-      {screen === 'register' && <RegisterScreen go={go} goHome={goHome} tempToken={tempToken} setJwt={setJwt} setUserName={setUserName} />}
-      {screen === 'boxes' && <BoxSelectionScreen go={go} goHome={goHome} jwt={jwt} userName={userName} selectedBox={selectedBox} setSelectedBox={setSelectedBox} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
+      {screen === 'home' && <HomeScreen go={go} startLogin={(next) => { setAfterLogin(next); go('login'); }} lockerInfo={lockerInfo} activeLockerId={activeLockerId} setActiveLockerId={setActiveLockerId} allLockers={allLockers} />}
+      {screen === 'login' && <LoginScreen go={go} goHome={goHome} purpose={afterLogin} email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} loginMethod={loginMethod} setLoginMethod={setLoginMethod} />}
+      {screen === 'otp' && <OtpScreen go={go} next={afterLogin} back={back} email={email} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
+      {screen === 'phone-otp' && <PhoneOtpScreen go={go} next={afterLogin} back={back} phone={phone} setJwt={setJwt} setTempToken={setTempToken} setUserName={setUserName} />}
+      {screen === 'register' && <RegisterScreen go={go} next={afterLogin} goHome={goHome} tempToken={tempToken} setJwt={setJwt} setUserName={setUserName} />}
+      {screen === 'boxes' && <BoxSelectionScreen go={go} goHome={goHome} jwt={jwt} userName={userName} selectedBox={selectedBox} setSelectedBox={setSelectedBox} lockerInfo={lockerInfo} activeLockerId={activeLockerId} onReportBox={(boxId) => { setReportBoxId(boxId); go('report'); }} />}
+      {screen === 'report' && <ReportScreen goHome={goHome} jwt={jwt} userName={userName} lockerInfo={lockerInfo} activeLockerId={activeLockerId} initialBoxId={reportBoxId} showSuccess={showSuccess} />}
       {screen === 'order-info' && <OrderInfoScreen go={go} back={back} jwt={jwt} selectedBox={selectedBox} setOrderId={setOrderId} setOrderPin={setOrderPin} setOrderCode={setOrderCode} setTotalPrice={setTotalPrice} activeLockerId={activeLockerId} />}
       {screen === 'payment' && <PaymentScreen go={go} goHome={goHome} jwt={jwt} orderId={orderId} orderPin={orderPin} orderCode={orderCode} totalPrice={totalPrice} selectedBox={selectedBox} showSuccess={showSuccess} activeLockerId={activeLockerId} pinContact={loginMethod === 'email' ? { method: 'email', value: email } : { method: 'phone', value: phone }} />}
       {screen === 'staff' && <StaffScreen goHome={goHome} showSuccess={showSuccess} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
       {screen === 'success' && <SuccessScreen goHome={goHome} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
+      <DialogHost />
     </div>
   );
 }
@@ -170,6 +180,52 @@ function Header({ onBack, title }) {
 function Msg({ type, text }) {
   if (!text) return null;
   return <div className={`msg msg-${type}`}>{text}</div>;
+}
+
+// Hộp thoại kiosk thay alert()/confirm() của trình duyệt (hộp xám "localhost says" lạc giao diện và
+// lộ địa chỉ máy). Gọi được từ bất kỳ đâu: `notify(...)` trả Promise khi bấm OK, `ask(...)` trả true/false.
+let dialogListener = null;
+const openDialog = (opts) => new Promise(resolve => {
+  if (dialogListener) dialogListener({ ...opts, resolve });
+  else resolve(opts.confirm ? window.confirm(opts.message) : (window.alert(opts.message), true));
+});
+const notify = (message, opts = {}) => openDialog({ message, ...opts });
+const ask = (message, opts = {}) => openDialog({ message, confirm: true, ...opts });
+
+const DIALOG_TONES = {
+  info: { Icon: Info, title: 'Thông báo' },
+  success: { Icon: CheckCircle, title: 'Thành công' },
+  warn: { Icon: AlertTriangle, title: 'Lưu ý' },
+  error: { Icon: XCircle, title: 'Có lỗi xảy ra' },
+};
+
+function DialogHost() {
+  const [dialog, setDialog] = useState(null);
+  useEffect(() => {
+    dialogListener = setDialog;
+    return () => { dialogListener = null; };
+  }, []);
+  if (!dialog) return null;
+  const tone = DIALOG_TONES[dialog.tone] ? dialog.tone : 'info';
+  const { Icon } = DIALOG_TONES[tone];
+  const close = (value) => { setDialog(null); dialog.resolve(value); };
+  return (
+    <div className="modal-overlay kiosk-dialog-overlay" onClick={() => close(false)}>
+      <div className={`kiosk-dialog tone-${tone}`} role="alertdialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="kiosk-dialog-icon"><Icon size={30} /></div>
+        <h3>{dialog.title || DIALOG_TONES[tone].title}</h3>
+        <p>{dialog.message}</p>
+        <div className="kiosk-dialog-actions">
+          {dialog.confirm && (
+            <button className="btn btn-secondary" onClick={() => close(false)}>{dialog.cancelText || 'Huỷ'}</button>
+          )}
+          <button className="btn btn-primary" autoFocus onClick={() => close(true)}>
+            {dialog.confirmText || (dialog.confirm ? 'Đồng ý' : 'Đã hiểu')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Mã mở ô của lượt thuê + lời nhắc giữ mã. Thuê bằng email: backend gửi ngay thư có đủ thông tin lượt
@@ -207,7 +263,7 @@ function Btn({ children, onClick, loading, disabled, variant = 'primary', style,
 // ============================================
 // HOME
 // ============================================
-function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLockers }) {
+function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLockerId, allLockers }) {
   return (
     <div className="screen screen-home-split">
       <div className="home-left">
@@ -228,6 +284,15 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
           </div>
         </div>
         <div className="footer">Powered by Lock.R IoT System</div>
+
+        {/* Báo ô tủ hư: nút tròn 3D như nút "Báo sự cố" trên app (không chiếm chỗ của 2 thẻ chính).
+            Cần đăng nhập vì backend ghi người báo (REPORTER_REQUIRED). */}
+        <button className="home-report-fab" onClick={() => startLogin('report')} aria-label="Báo ô tủ hư">
+          <span className="home-report-fab-circle">
+            <LottieAnimation animationData={baoSuCo3dAnimation} className="home-report-fab-lottie" />
+          </span>
+          <span className="home-report-fab-label">Báo sự cố</span>
+        </button>
       </div>
 
       <div className="home-right">
@@ -286,7 +351,7 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
           </div>
 
           {/* Card 2: Gửi đồ / Thuê tủ */}
-          <div className="card-3d-action secondary" onClick={() => go('login')}>
+          <div className="card-3d-action secondary" onClick={() => startLogin('boxes')}>
             <div className="card-3d-thumb">
               <img src={boxStack3d} alt="Gửi đồ" />
             </div>
@@ -302,6 +367,7 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
               </div>
             </div>
           </div>
+
         </div>
       </div>
     </div>
@@ -312,7 +378,7 @@ function HomeScreen({ go, lockerInfo, activeLockerId, setActiveLockerId, allLock
 // ============================================
 // LOGIN (Phone / Email OTP)
 // ============================================
-function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod, setLoginMethod }) {
+function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, setPhone, loginMethod, setLoginMethod }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
   const recaptchaReady = useRef(false);
@@ -367,7 +433,10 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
 
   return (
     <div className="screen">
-      <Header onBack={goHome} title="Nhập thông tin" />
+      <Header onBack={goHome} title={purpose === 'report' ? 'Đăng nhập để báo ô tủ hư' : 'Nhập thông tin'} />
+      {purpose === 'report' && (
+        <p className="login-purpose"><Wrench size={15} /> Xác thực số điện thoại hoặc email để kỹ thuật viên liên hệ lại khi cần.</p>
+      )}
       <div className="login-tabs">
         <div className={`login-tab ${loginMethod === 'phone' ? 'active' : ''}`} onClick={() => { setLoginMethod('phone'); setMsg(''); }}>
           <Smartphone size={16} /> Số điện thoại
@@ -407,7 +476,7 @@ function LoginScreen({ go, goHome, email, setEmail, phone, setPhone, loginMethod
 // ============================================
 // PHONE OTP (Firebase verification)
 // ============================================
-function PhoneOtpScreen({ go, back, phone, setJwt, setTempToken, setUserName }) {
+function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken, setUserName }) {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
@@ -432,7 +501,7 @@ function PhoneOtpScreen({ go, back, phone, setJwt, setTempToken, setUserName }) 
           setJwt(res.data.accessToken);
           const name = res.data.userInfo?.fullName || phone;
           setUserName(name);
-          go('boxes');
+          go(next);
         }
       } else {
         setMsg(res.message || 'Lỗi đăng nhập');
@@ -472,7 +541,7 @@ function PhoneOtpScreen({ go, back, phone, setJwt, setTempToken, setUserName }) 
 // ============================================
 // OTP
 // ============================================
-function OtpScreen({ go, back, email, setJwt, setTempToken, setUserName }) {
+function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setUserName }) {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
@@ -490,7 +559,7 @@ function OtpScreen({ go, back, email, setJwt, setTempToken, setUserName }) {
           setJwt(res.data.accessToken);
           const name = res.data.userInfo?.fullName || email;
           setUserName(name);
-          go('boxes');
+          go(next);
         }
       } else {
         setMsg(res.message || 'OTP không hợp lệ');
@@ -521,7 +590,7 @@ function OtpScreen({ go, back, email, setJwt, setTempToken, setUserName }) {
 // ============================================
 // REGISTER (Kiosk Quick Register — API 1.4)
 // ============================================
-function RegisterScreen({ go, goHome, tempToken, setJwt, setUserName }) {
+function RegisterScreen({ go, next = 'boxes', goHome, tempToken, setJwt, setUserName }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
   const reqSent = useRef(false);
@@ -537,7 +606,7 @@ function RegisterScreen({ go, goHome, tempToken, setJwt, setUserName }) {
         if (res.success && res.data) {
           setJwt(res.data.accessToken);
           setUserName('Khách');
-          go('boxes');
+          go(next);
         } else {
           setMsg(res.message || 'Lỗi đăng ký nhanh');
         }
@@ -546,7 +615,7 @@ function RegisterScreen({ go, goHome, tempToken, setJwt, setUserName }) {
       }
       setLoading(false);
     })();
-  }, [tempToken, setJwt, setUserName, go]);
+  }, [tempToken, setJwt, setUserName, go, next]);
 
   return (
     <div className="screen">
@@ -591,7 +660,7 @@ function boxPlacement(boxes) {
   return { cols, rows, place };
 }
 
-function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelectedBox, lockerInfo, activeLockerId }) {
+function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelectedBox, lockerInfo, activeLockerId, onReportBox }) {
   const [boxes, setBoxes] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -668,7 +737,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
     try {
       const pinCode = manageBox.order.pinCode;
       if (!pinCode) {
-        alert('Đơn này không còn mã PIN hoạt động. Vui lòng thao tác lại trên mobile app.');
+        notify('Đơn này không còn mã PIN hoạt động. Vui lòng thao tác lại trên app Lock.R.', { tone: 'warn' });
         return;
       }
       const unlockRes = await api.unlockBox(
@@ -678,12 +747,12 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
         'PICKUP',
       );
       if (unlockRes.success && unlockRes.data?.accepted) {
-        alert(unlockRes.data?.message || 'Hộp đã được mở. Vui lòng đóng cửa khi lấy đồ xong.');
+        notify(unlockRes.data?.message || 'Ô đã mở. Vui lòng đóng cửa khi lấy đồ xong.', { tone: 'success', title: `Đã mở ô #${manageBox.box.boxNumber}` });
       } else {
-        alert(unlockRes.data?.message || unlockRes.message || 'Lỗi mở hộp');
+        notify(unlockRes.data?.message || unlockRes.message || 'Không mở được ô, vui lòng thử lại.', { tone: 'error' });
       }
     } catch (e) {
-      alert('Lỗi kết nối máy chủ');
+      notify('Không kết nối được máy chủ. Vui lòng thử lại.', { tone: 'error', title: 'Mất kết nối' });
     } finally {
       setManageLoading(false);
     }
@@ -692,29 +761,29 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
   const endManageBox = async () => {
     const order = manageBox.order;
     if (String(order.type || '').toUpperCase() !== 'RENTAL') {
-      alert('Chỉ đơn thuê ô mới kết thúc được tại đây.');
+      notify('Chỉ đơn thuê ô mới kết thúc được tại đây.', { tone: 'warn' });
       return;
     }
-    if (!window.confirm('Bạn đã lấy hết đồ và đóng cửa ô? Kết thúc thuê sẽ trả ô lại.')) return;
+    if (!(await ask('Bạn đã lấy hết đồ và đóng cửa ô? Kết thúc thuê sẽ trả ô lại cho hệ thống.', { tone: 'warn', title: 'Kết thúc thuê?', confirmText: 'Kết thúc thuê', cancelText: 'Chưa' }))) return;
     setManageLoading(true);
     try {
       const res = await api.endRental(jwt, order.id);
       if (res.success) {
-        alert('Đã kết thúc thuê. Ô đã được trả lại.');
+        notify('Ô đã được trả lại. Cảm ơn bạn đã dùng Lock.R!', { tone: 'success', title: 'Đã kết thúc thuê' });
         setManageBox(null);
         await fetchData();
       } else {
-        alert(res.data?.message || res.message || 'Không kết thúc thuê được');
+        notify(res.data?.message || res.message || 'Không kết thúc thuê được, vui lòng thử lại.', { tone: 'error' });
       }
     } catch (e) {
-      alert('Lỗi kết nối máy chủ');
+      notify('Không kết nối được máy chủ. Vui lòng thử lại.', { tone: 'error', title: 'Mất kết nối' });
     } finally {
       setManageLoading(false);
     }
   };
 
   const notImplemented = () => {
-    alert('Tính năng này trên Kiosk đang được hoàn thiện. Vui lòng sử dụng Mobile App để tiếp tục thao tác.');
+    notify('Gia hạn thuê và ủy quyền người khác lấy hộ hiện thực hiện trên app Lock.R — mở mục Đơn tủ, chọn đơn này.', { tone: 'info', title: 'Thực hiện trên app Lock.R' });
   };
 
   // Ưu tiên dữ liệu box vừa fetch trong màn hình này. `lockerInfo.boxes` từ
@@ -814,6 +883,8 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
             statusText = 'Đã đặt'; boxClass = 'booked';
           } else if (status === 'FAULT') {
             statusText = 'Lỗi';
+          } else if (status === 'PENDING_CHECK') {
+            statusText = 'Chờ kiểm tra';
           } else if (['OUT_OF_SERVICE', 'MAINTENANCE', 'OFFLINE'].includes(status)) {
             statusText = 'Bảo trì';
           }
@@ -857,7 +928,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
                <Btn onClick={notImplemented} variant="secondary" disabled={manageLoading}><Clock size={18}/> Gia hạn thuê</Btn>
                <Btn onClick={endManageBox} variant="secondary" disabled={manageLoading}><LogOut size={18}/> Kết thúc thuê & trả ô</Btn>
                <Btn onClick={notImplemented} variant="secondary" disabled={manageLoading}><Users size={18}/> Ủy quyền người khác lấy hộ</Btn>
-               <Btn onClick={notImplemented} variant="secondary" disabled={manageLoading}><AlertTriangle size={18}/> Báo ô lỗi</Btn>
+               <Btn onClick={() => onReportBox?.(manageBox.box.boxId)} variant="secondary" disabled={manageLoading}><AlertTriangle size={18}/> Báo ô lỗi</Btn>
             </div>
           </div>
         </div>
@@ -1078,42 +1149,44 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
             </div>
           </div>
 
-          {/* Ghi chú */}
-          <div className="order-block">
-            <div className="order-block-title"><ClipboardList size={16} /> Ghi chú <span className="order-optional">tuỳ chọn</span></div>
-            <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Quần áo, cần giữ cẩn thận..." />
-          </div>
+          <div className="order-row-2">
+            {/* Ghi chú */}
+            <div className="order-block">
+              <div className="order-block-title"><ClipboardList size={16} /> Ghi chú <span className="order-optional">tuỳ chọn</span></div>
+              <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Quần áo, cần giữ cẩn thận..." />
+            </div>
 
-          {/* Mã giảm giá */}
-          <div className="order-block">
-            <div className="order-block-title"><CreditCard size={16} /> Mã giảm giá <span className="order-optional">tuỳ chọn</span></div>
-            <div className="promo-row">
-              <input className="input" value={promoCode} onChange={e => {
-                setPromoCode(e.target.value.toUpperCase());
-                if (promoApplied || promoError) { setPromoApplied(false); setPromoError(''); setPromoDiscount(0); setPromoDetail(null); }
-              }} placeholder="Nhập mã khuyến mãi" style={{ textTransform: 'uppercase' }} disabled={promoApplied || promoLoading} />
-              {!promoApplied ? (
-                <button className="btn btn-primary promo-btn" onClick={handleApplyPromo} disabled={!promoCode.trim() || promoLoading}>
-                  {promoLoading ? <Loader2 size={18} style={{ animation: 'spin 0.6s linear infinite' }} /> : 'Áp dụng'}
-                </button>
-              ) : (
-                <button className="btn btn-secondary promo-btn" onClick={clearPromo}>
-                  <X size={18} /> Gỡ mã
-                </button>
+            {/* Mã giảm giá */}
+            <div className="order-block">
+              <div className="order-block-title"><CreditCard size={16} /> Mã giảm giá <span className="order-optional">tuỳ chọn</span></div>
+              <div className="promo-row">
+                <input className="input" value={promoCode} onChange={e => {
+                  setPromoCode(e.target.value.toUpperCase());
+                  if (promoApplied || promoError) { setPromoApplied(false); setPromoError(''); setPromoDiscount(0); setPromoDetail(null); }
+                }} placeholder="Nhập mã khuyến mãi" style={{ textTransform: 'uppercase' }} disabled={promoApplied || promoLoading} />
+                {!promoApplied ? (
+                  <button className="btn btn-primary promo-btn" onClick={handleApplyPromo} disabled={!promoCode.trim() || promoLoading}>
+                    {promoLoading ? <Loader2 size={18} style={{ animation: 'spin 0.6s linear infinite' }} /> : 'Áp dụng'}
+                  </button>
+                ) : (
+                  <button className="btn btn-secondary promo-btn" onClick={clearPromo}>
+                    <X size={18} /> Gỡ mã
+                  </button>
+                )}
+              </div>
+              {promoError && <div className="promo-msg error"><AlertTriangle size={14} /> {promoError}</div>}
+              {promoApplied && promoDetail && (
+                <div className={`promo-msg ${promoBelowMin ? 'warn' : 'ok'}`}>
+                  <CheckCircle size={14} />
+                  <span>
+                    <strong>{promoDetail.title || promoDetail.name}</strong>
+                    {promoBelowMin
+                      ? <> — cần đơn tối thiểu {fmt(promoMinOrder)}, hãy tăng số giờ thuê hoặc gỡ mã.</>
+                      : <> — đã giảm {fmt(promoDiscount)}</>}
+                  </span>
+                </div>
               )}
             </div>
-            {promoError && <div className="promo-msg error"><AlertTriangle size={14} /> {promoError}</div>}
-            {promoApplied && promoDetail && (
-              <div className={`promo-msg ${promoBelowMin ? 'warn' : 'ok'}`}>
-                <CheckCircle size={14} />
-                <span>
-                  <strong>{promoDetail.title || promoDetail.name}</strong>
-                  {promoBelowMin
-                    ? <> — cần đơn tối thiểu {fmt(promoMinOrder)}, hãy tăng số giờ thuê hoặc gỡ mã.</>
-                    : <> — đã giảm {fmt(promoDiscount)}</>}
-                </span>
-              </div>
-            )}
           </div>
         </section>
 
@@ -1585,6 +1658,134 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
 const needsFollowUp = (nextStep) => nextStep === 'CONFIRM_DROP' || nextStep === 'RENTAL_ACCESS';
 
 // ============================================
+// REPORT (báo ô tủ hư)
+// ============================================
+const REPORT_REASONS = [
+  'Cửa ô không mở',
+  'Cửa không đóng / không khoá được',
+  'Ô bị hư hỏng',
+  'Ô bẩn / có mùi lạ',
+  'Màn hình / bàn phím tủ lỗi',
+  'Khác',
+];
+const WHOLE_LOCKER = 'LOCKER';
+
+function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initialBoxId, showSuccess }) {
+  const [boxes, setBoxes] = useState([]);
+  const [target, setTarget] = useState(initialBoxId ?? null);   // boxId | WHOLE_LOCKER | null
+  const [reason, setReason] = useState('');
+  const [detail, setDetail] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    api.getLockerLayout(activeLockerId)
+      .then(res => {
+        if (!alive) return;
+        if (res.success && Array.isArray(res.data?.cells)) {
+          setBoxes(res.data.cells.map(c => ({ ...c, boxId: c.id ?? c.boxId })));
+        } else setMsg(res.message || 'Không tải được sơ đồ tủ');
+      })
+      .catch(() => { if (alive) setMsg('Không kết nối được máy chủ'); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [activeLockerId]);
+
+  const layout = boxPlacement(boxes);
+  const ordered = layout ? boxes : [...boxes].sort((a, b) => (a.boxNumber ?? 0) - (b.boxNumber ?? 0));
+  const targetBox = target && target !== WHOLE_LOCKER ? boxes.find(b => b.boxId === target) : null;
+  const where = target === WHOLE_LOCKER ? 'Cả tủ' : targetBox ? `Ô ${targetBox.boxNumber}` : null;
+  const canSend = Boolean(target && reason) && !sending;
+
+  const submit = async () => {
+    if (!canSend) return;
+    setSending(true); setMsg('');
+    try {
+      const note = detail.trim();
+      const res = await api.reportLocker(jwt, activeLockerId, {
+        title: `${where}: ${reason}`,
+        description: note || reason,
+        ...(targetBox ? { boxId: targetBox.boxId } : {}),
+      });
+      if (res.success && res.data) {
+        showSuccess('Đã gửi báo cáo!', 'Cảm ơn bạn đã báo. Kỹ thuật viên phụ trách tủ sẽ kiểm tra sớm nhất. Bạn theo dõi phiếu trong mục Báo sự cố của app Lock.R.', {
+          reportCode: res.data.id != null ? `RPT-${res.data.id}` : '',
+          boxNumber: targetBox?.boxNumber,
+          boxLabel: 'Ô được báo:',
+        });
+      } else {
+        setMsg(res.data?.message || res.message || 'Không gửi được báo cáo, vui lòng thử lại.');
+      }
+    } catch {
+      setMsg('Không kết nối được máy chủ. Vui lòng thử lại.');
+    }
+    setSending(false);
+  };
+
+  return (
+    <div className="screen screen-boxes">
+      <Header onBack={goHome} title="Báo ô tủ hư" />
+      <div className="boxes-layout">
+        <aside className="boxes-side">
+          {userName && <div className="user-chip"><User size={15} /><span>{userName}</span></div>}
+
+          <div className="report-step-title"><span>1</span> Chạm vào ô bị hư trên sơ đồ</div>
+
+          <div className="report-step">
+            <div className="report-step-title"><span>2</span> Vấn đề gặp phải</div>
+            <div className="report-reasons">
+              {REPORT_REASONS.map(r => (
+                <button key={r} className={`report-reason ${reason === r ? 'active' : ''}`} onClick={() => setReason(r)}>{r}</button>
+              ))}
+            </div>
+            {/* input (không phải textarea): bàn phím ảo của kiosk chỉ nhận <input> */}
+            <input className="input report-detail" type="text" maxLength={500} value={detail}
+              onChange={e => setDetail(e.target.value)} placeholder="Mô tả thêm (tuỳ chọn)" />
+          </div>
+
+          <div className={`box-picked ${where ? 'on' : ''}`}>
+            {where
+              ? <><AlertTriangle size={18} /><span>Báo <strong>{where}</strong>{reason ? <> · {reason}</> : ' — chọn vấn đề'}</span></>
+              : <span>Chạm vào ô bị hư bên cạnh, hoặc chọn <strong>Sự cố cả tủ</strong></span>}
+          </div>
+          {msg && <Msg type="error" text={msg} />}
+          <Btn onClick={submit} loading={sending} disabled={!canSend}><Send size={18} /> Gửi báo cáo</Btn>
+        </aside>
+
+        <section className="boxes-main">
+          <div className="report-locker">
+            <span><MapPin size={15} color="var(--accent)" /> {lockerInfo ? `${lockerInfo.storeName || lockerInfo.name} · ${lockerInfo.code}` : 'Sơ đồ tủ'}</span>
+            <button className={`report-whole ${target === WHOLE_LOCKER ? 'active' : ''}`} onClick={() => setTarget(WHOLE_LOCKER)}>
+              <Lock size={15} /> Sự cố cả tủ
+            </button>
+          </div>
+          {loading && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />Đang tải...</p>}
+          <div className={`box-grid ${layout ? 'by-layout' : 'auto'}`} style={layout ? { '--cols': layout.cols, '--rows': layout.rows } : undefined}>
+            {ordered.map(box => {
+              const isDrone = box.cellType === 'DRONE';
+              const BoxIcon = isDrone ? Plane : ['LUGGAGE', 'XL'].includes(box.cellType) ? Luggage : Package;
+              const status = String(box.status || '').toUpperCase();
+              const already = ['FAULT', 'PENDING_CHECK'].includes(status);
+              return (
+                <button key={box.boxId} style={layout?.place.get(box.boxId)}
+                  className={`box-item report-box ${target === box.boxId ? 'selected' : ''} ${already ? 'reported' : ''}`}
+                  onClick={() => setTarget(box.boxId)}>
+                  <div className="box-icon"><BoxIcon size={26} /></div>
+                  <div className="box-number">Ô {box.boxNumber}</div>
+                  <div className="box-status">{target === box.boxId ? 'Đã chọn' : already ? 'Đã có báo lỗi' : isDrone ? 'Ô drone' : 'Chạm để chọn'}</div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // STAFF
 // ============================================
 function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
@@ -1711,55 +1912,44 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 // SUCCESS SCREEN (Redesigned)
 // ============================================
 function SuccessScreen({ goHome, title, msg, extra, countdown }) {
+  const hasCard = Boolean(extra && (extra.orderCode || extra.reportCode || extra.boxNumber || extra.orderPin));
   return (
-    <div className="screen success-screen" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center', background: 'radial-gradient(circle at 50% 30%, rgba(52, 211, 153, 0.12) 0%, var(--bg) 70%)' }}>
-      <div className="lottie-success-wrap">
-        <LottieAnimation animationData={deliveryAnimation} className="lottie-player-inner" />
+    // Có thẻ thông tin ⇒ 2 cột (màn 1024×600 không đủ cao để xếp dọc hoạt ảnh + tiêu đề + thẻ mã + nút).
+    <div className={`screen success-screen ${hasCard ? 'has-card' : ''}`}>
+      <div className="success-main">
+        <div className="lottie-success-wrap">
+          <LottieAnimation animationData={deliveryAnimation} className="lottie-player-inner" />
+        </div>
+        <h2 className="success-title">{title}</h2>
+        <p className="success-msg">{msg}</p>
+        <div className="success-actions">
+          <Btn onClick={goHome} variant="primary"><Home size={20} /> Về trang chủ</Btn>
+          <p className="countdown">Tự động đóng sau <strong>{countdown}</strong> giây</p>
+        </div>
       </div>
-      
-      <h2 style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>{title}</h2>
-      <p style={{ fontSize: 15, color: 'var(--text-secondary)', maxWidth: 420, lineHeight: 1.5 }}>{msg}</p>
 
-      {extra && (
-        <div className="extra-card" style={{ 
-          marginTop: 24, width: '100%', maxWidth: 440, padding: '20px 24px',
-          background: '#fff', borderRadius: 20, border: '1px solid var(--border)',
-          boxShadow: '0 16px 40px rgba(0,0,0,0.06)', gap: 14
-        }}>
+      {hasCard && (
+        <div className="extra-card success-card">
           {extra.orderCode && (
-            <div className="extra-row" style={{ justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', paddingBottom: 10 }}>
-              <span style={{ color: 'var(--text-muted)' }}>Mã đơn hàng:</span>
-              <strong style={{ fontSize: 15 }}>{extra.orderCode}</strong>
-            </div>
+            <div className="success-row"><span>Mã đơn hàng</span><strong>{extra.orderCode}</strong></div>
+          )}
+          {extra.reportCode && (
+            <div className="success-row"><span>Mã phiếu sự cố</span><strong>{extra.reportCode}</strong></div>
           )}
           {extra.boxNumber && (
-            <div className="extra-row" style={{ justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', paddingBottom: 10 }}>
-              <span style={{ color: 'var(--text-muted)' }}>Ô tủ đã mở:</span>
-              <strong style={{ fontSize: 24, color: 'var(--success)', fontWeight: 900 }}>Ô #{extra.boxNumber}</strong>
-            </div>
+            <div className="success-row"><span>{(extra.boxLabel || 'Ô tủ đã mở').replace(/:$/, '')}</span><strong className="box">Ô #{extra.boxNumber}</strong></div>
           )}
           {extra.orderPin && extra.pinContact && (
             <PinNotice pin={extra.orderPin} contact={extra.pinContact} compact />
           )}
           {extra.orderPin && !extra.pinContact && (
-            <div className="extra-row" style={{ justifyContent: 'space-between', flexDirection: 'column', gap: 6, paddingTop: 6 }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Mã PIN để mở lại tủ khi nhận đồ:</span>
-              <div style={{ 
-                background: 'var(--accent-dim)', padding: '10px 20px', 
-                borderRadius: 12, border: '2px dashed rgba(59, 130, 246, 0.4)',
-                fontSize: 26, fontWeight: 800, color: 'var(--accent)', letterSpacing: 4
-              }}>
-                {extra.orderPin}
-              </div>
+            <div className="success-pin">
+              <span>Mã PIN để mở lại tủ khi nhận đồ</span>
+              <div className="pin-notice-code">{extra.orderPin}</div>
             </div>
           )}
         </div>
       )}
-
-      <div style={{ marginTop: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, width: '100%', maxWidth: 320 }}>
-        <Btn onClick={goHome} variant="primary" style={{ height: 52, fontSize: 17 }}><Home size={20} /> Về trang chủ</Btn>
-        <p className="countdown" style={{ fontSize: 13 }}>Tự động đóng sau <strong>{countdown}</strong> giây</p>
-      </div>
     </div>
   );
 }
