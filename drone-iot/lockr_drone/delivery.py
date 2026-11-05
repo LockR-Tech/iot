@@ -10,11 +10,15 @@ Luồng (Pi → backend → MQTT → tủ, tái dùng kênh có sẵn):
     Pi  ◀─MARKER_VALIDATED  (backend đã kiểm và gửi lệnh mở cho tủ)
     Pi  ◀─LID_OPENING       (tủ đã NHẬN lệnh, nắp đang chạy)
     Pi  ◀─LID_OPENED        (tủ báo nắp đã mở; lidConfirmation = LIMIT_SWITCH | STEP_COUNT)
-                            demo trong nhà: kèm dropSimulationSeconds = LỆNH NHẢ HÀNG — Pi giả lập
-                            nhả hàng đúng số giây đó (cấu hình admin) rồi:
+                            kèm parcelRelease = LỆNH NHẢ HÀNG: servo mở chốt, giữ vài giây, đóng chốt
+                            (release.py). Pi chưa bật servo: đơn demo kèm dropSimulationSeconds ⇒ giả lập
+                            nhả hàng đúng số giây đó (cấu hình admin). Nhả xong:
     Pi  ──DROP_PHASE_COMPLETED─▶ backend ──cabinet/{id}/command/close {lid:true}──▶ tủ
     Pi  ◀─LID_CLOSING       (backend đã nhận báo cáo, tủ đang đóng nắp — thôi gửi lại báo cáo)
     Pi  ◀─LID_OPEN_FAILED / LID_CLOSE_FAILED / MARKER_REJECTED / SAFETY_ABORT / DELIVERY_READY
+    Servo không nhả được (đã thử lại):
+    Pi  ──PARCEL_RELEASE_FAILED─▶ backend ──close {lid:true}──▶ tủ (đóng nắp an toàn, kiện vẫn trên drone)
+    Pi  ◀─LID_CLOSING → PARCEL_RELEASE_FAILED (nắp đã đóng; đơn chờ KTV drone xử lý, Pi không tự giao lại)
 
 Quy tắc:
   • Camera trống / quay xung quanh không thấy mã nào ⇒ không gửi bản tin nào lên hệ thống.
@@ -24,10 +28,11 @@ Quy tắc:
     `lost_reset_s` thì đếm lại từ đầu.
   • Mỗi lần tiếp cận gửi MARKER_DETECTED MỘT lần; chỉ gửi lại khi backend không phản hồi sau
     `response_timeout_s`, tối đa `max_requests` lần (backend giữ nguyên phiên nếu đã có).
-  • Nhận diện và mở nắp KHÔNG điều khiển drone đáp. Nhả hàng hiện là giả lập (chờ đủ số giây backend gửi);
-    LID_OPENED không kèm dropSimulationSeconds (giao ngoài trời) thì Pi không tự báo nhả hàng.
-  • Báo nhả hàng xong gửi lại mỗi `response_timeout_s` (tối đa `max_requests` lần) cho tới khi backend trả
-    LID_CLOSING / DELIVERY_READY.
+  • Nhận diện và mở nắp KHÔNG điều khiển drone đáp. Chỉ nhả hàng khi backend gửi lệnh nhả (tủ đã báo nắp mở);
+    LID_OPENED không có lệnh nhả thì Pi không làm gì thêm.
+  • Servo chạy ở luồng riêng (main.py nhận việc qua `claim_release`), không chặn luồng camera / MQTT.
+  • Báo nhả hàng xong (hoặc lỗi) gửi lại mỗi `response_timeout_s` (tối đa `max_requests` lần) cho tới khi backend
+    trả LID_CLOSING / DELIVERY_READY.
 """
 from __future__ import annotations
 
@@ -48,11 +53,13 @@ REQUEST_SENT = "REQUEST_SENT"      # đã gửi MARKER_DETECTED, chờ backend
 VALIDATED = "VALIDATED"            # backend đã kiểm, đã gửi lệnh mở nắp cho tủ
 LID_OPENING = "LID_OPENING"        # tủ đã nhận lệnh, nắp đang chạy
 LID_OPEN = "LID_OPEN"              # tủ báo nắp đã mở (không có lệnh nhả hàng giả lập)
-DROPPING = "DROPPING"              # nhận lệnh nhả hàng: đang giả lập nhả hàng trong số giây cấu hình
+RELEASING = "RELEASING"            # nhận lệnh nhả hàng: servo đang mở chốt
+DROPPING = "DROPPING"              # nhận lệnh nhả hàng, Pi chưa bật servo: giả lập trong số giây cấu hình
 DROP_REPORTED = "DROP_REPORTED"    # đã báo nhả hàng xong, chờ backend xác nhận
 LID_CLOSING = "LID_CLOSING"        # backend đã gửi lệnh đóng nắp, tủ đang đóng
 COMPLETED = "COMPLETED"            # hàng đã vào ô, nắp đã đóng
 FAILED = "FAILED"                  # lỗi; sau `cooldown_s` quay lại quét nếu còn nhiệm vụ
+RELEASE_FAILED = "RELEASE_FAILED"  # servo không nhả được: kiện vẫn trên drone, KHÔNG tự quét lại
 
 STATE_MESSAGES = {
     NO_TARGET: "Chưa có nhiệm vụ giao hàng — không gửi lệnh mở nắp",
@@ -62,12 +69,16 @@ STATE_MESSAGES = {
     VALIDATED: "Hệ thống đã gửi lệnh mở nắp tới tủ",
     LID_OPENING: "Tủ đã nhận lệnh, nắp trượt đang mở",
     LID_OPEN: "Tủ báo nắp đã mở",
+    RELEASING: "Servo đang mở chốt nhả hàng",
     DROPPING: "Đang giả lập nhả hàng",
     DROP_REPORTED: "Đã báo nhả hàng xong, chờ hệ thống",
     LID_CLOSING: "Tủ đang đóng nắp",
     COMPLETED: "Đã giao xong — nắp đã đóng",
     FAILED: "Lỗi",
+    RELEASE_FAILED: "Servo không nhả được hàng — kiện vẫn trên drone",
 }
+
+RELEASE_TIMEOUT_S = 60.0           # servo chưa xong sau chừng này giây ⇒ coi như lỗi
 
 
 LID_TEST_MODE = "LID_TEST"         # chế độ thử nắp (admin bật): mục tiêu không gắn đơn
@@ -114,9 +125,10 @@ class DeliveryTracker:
                  lid_timeout_s: float = 180.0, max_requests: int = 3, cooldown_s: float = 5.0,
                  exhausted_cooldown_s: float = 120.0,
                  target_poll_s: float = 10.0, target_refresh_s: float = 30.0,
-                 marker_recent_s: float = 2.0,
+                 marker_recent_s: float = 2.0, servo_enabled: bool = False,
                  clock: Callable[[], float] = time.monotonic):
         self.drone_id = drone_id
+        self.servo_enabled = servo_enabled    # có servo nhả hàng thật (SERVO_RELEASE_ENABLED)
         self.dictionary = dictionary          # từ điển camera đang dò
         self.stable_frames = max(1, int(stable_frames))
         self.stable_seconds = max(0.0, float(stable_seconds))
@@ -151,6 +163,7 @@ class DeliveryTracker:
         self.drop_simulation_s = None
         self._drop_reports = 0
         self._drop_report_due = False
+        self._reset_release()
         self.last_pose = None
 
     # ─── nhiệm vụ ───
@@ -286,12 +299,19 @@ class DeliveryTracker:
             elif event == "LID_OPENING":
                 self._set(LID_OPENING)
             elif event == "LID_OPENED":
-                if self.state in (DROPPING, DROP_REPORTED, LID_CLOSING, COMPLETED):
-                    return None   # lệnh lặp (QoS 1): không giả lập nhả hàng lần nữa
+                if self.state in (RELEASING, DROPPING, DROP_REPORTED, LID_CLOSING, COMPLETED, RELEASE_FAILED):
+                    return None   # lệnh lặp (QoS 1): không nhả hàng lần nữa
                 self.lid_confirmation = cmd.get("lidConfirmation") or "LIMIT_SWITCH"
                 self._session_id = cmd.get("sessionId") or self._session_id
                 self._correlation_id = cmd.get("correlationId") or self._correlation_id
-                self._start_drop(cmd.get("dropSimulationSeconds"), cmd.get("errorMessage"))
+                self._start_drop(cmd.get("dropSimulationSeconds"), cmd.get("errorMessage"),
+                                 bool(cmd.get("parcelRelease")))
+            elif self.state == RELEASE_FAILED:
+                # Servo đã báo lỗi: chỉ cập nhật lời nhắn, giữ trạng thái (không tự quét lại, không giao lại).
+                if event in ("LID_CLOSING", "PARCEL_RELEASE_FAILED"):
+                    self._drop_report_due = False
+                    self._report_acked = True
+                self.message = cmd.get("errorMessage") or self.message
             elif event == "LID_CLOSING":
                 if self.state != COMPLETED:
                     self._drop_report_due = False
@@ -332,20 +352,24 @@ class DeliveryTracker:
         self._correlation_id = None
         self.lid_confirmation = self.drop_simulation_s = None
         self._drop_report_due = False
+        self._reset_release()
         self._reset_stability()
         session_state = str(cmd.get("sessionState") or "")
         if session_state == "LID_OPENED":
-            # Pi khởi động lại khi nắp đang mở chờ thả: backend nhắc lại lệnh nhả hàng (nếu là demo).
-            self._start_drop(cmd.get("dropSimulationSeconds"), None)
+            # Pi khởi động lại khi nắp đang mở chờ thả: backend nhắc lại lệnh nhả hàng.
+            self._start_drop(cmd.get("dropSimulationSeconds"), None, bool(cmd.get("parcelRelease")))
             return
         resume = {"LID_OPENING": LID_OPENING, "OPEN_LID_REQUESTED": VALIDATED,
                   "CLOSE_LID_REQUESTED": LID_CLOSING}.get(session_state)
         self._set(resume or SCANNING, f"Nhiệm vụ đơn #{target.order_id}: tìm mã ArUco #{target.marker_id}"
                   if resume is None else None)
 
-    def _start_drop(self, seconds, lid_message: Optional[str]) -> None:
-        """Nắp đã mở. Có `seconds` (lệnh nhả hàng của demo) ⇒ giả lập nhả hàng chừng ấy giây rồi báo
-        DROP_PHASE_COMPLETED; không có ⇒ chỉ hiển thị nắp đã mở (giao ngoài trời, drone tự xử lý)."""
+    def _start_drop(self, seconds, lid_message: Optional[str], release_requested: bool = False) -> None:
+        """Nắp đã mở. Có lệnh nhả hàng (`parcelRelease`, hoặc `seconds` của backend cũ cho đơn demo):
+        - bật servo ⇒ RELEASING, main.py quay servo rồi gọi `release_finished`;
+        - chưa bật servo, có `seconds` ⇒ giả lập nhả hàng chừng ấy giây rồi báo DROP_PHASE_COMPLETED;
+        - chưa bật servo, không có `seconds` (giao thật) ⇒ báo PARCEL_RELEASE_FAILED để backend đóng nắp.
+        Không có lệnh nhả hàng ⇒ chỉ hiển thị nắp đã mở."""
         try:
             seconds = float(seconds) if seconds is not None else None
         except (TypeError, ValueError):
@@ -353,25 +377,91 @@ class DeliveryTracker:
         self.drop_simulation_s = seconds if seconds and seconds > 0 else None
         self._drop_reports = 0
         self._drop_report_due = False
-        if self.drop_simulation_s is None:
-            self._set(LID_OPEN, lid_message or STATE_MESSAGES[LID_OPEN])
+        self._reset_release()
+        if self.servo_enabled and (release_requested or self.drop_simulation_s is not None):
+            log.info("Nhận lệnh nhả hàng: servo mở chốt (session=%s)", self._session_id)
+            self._release_due = True
+            self._set(RELEASING, "Nắp đã mở — servo đang mở chốt nhả hàng")
             return
-        log.info("Nhận lệnh nhả hàng: giả lập %.0f giây (session=%s)", self.drop_simulation_s, self._session_id)
-        self._set(DROPPING, f"Nắp đã mở — đang giả lập nhả hàng {self.drop_simulation_s:g} giây")
+        if self.drop_simulation_s is not None:
+            log.info("Nhận lệnh nhả hàng: giả lập %.0f giây (session=%s)", self.drop_simulation_s, self._session_id)
+            self.release_method = "SIMULATION"
+            self._set(DROPPING, f"Nắp đã mở — đang giả lập nhả hàng {self.drop_simulation_s:g} giây")
+            return
+        if release_requested:
+            self._release_failed("SERVO_DISABLED", "Pi drone chưa bật servo nhả hàng (SERVO_RELEASE_ENABLED)", 0)
+            return
+        self._set(LID_OPEN, lid_message or STATE_MESSAGES[LID_OPEN])
+
+    def claim_release(self) -> bool:
+        """True đúng một lần khi có lệnh nhả hàng bằng servo: main.py nhận việc và quay servo ở luồng riêng."""
+        with self._lock:
+            if self.state == RELEASING and self._release_due:
+                self._release_due = False
+                return True
+            return False
+
+    def release_finished(self, ok: bool, attempts: int, error: Optional[str] = None,
+                         warning: Optional[str] = None, details: Optional[dict] = None) -> None:
+        """Kết quả quay servo. Nhả xong ⇒ báo DROP_PHASE_COMPLETED; lỗi ⇒ báo PARCEL_RELEASE_FAILED.
+        `details`: số liệu thật của servo (góc, thời gian giữ, thời gian chạy, chân GPIO…) gửi kèm báo cáo."""
+        with self._lock:
+            if self.state != RELEASING:
+                log.warning("Bỏ kết quả servo (ok=%s): trạng thái giao hàng đã là %s", ok, self.state)
+                return
+            self._release_attempts = attempts
+            self._release_details = dict(details or {})
+            if not ok:
+                self._release_failed("SERVO_ERROR", error or "servo không phản hồi", attempts)
+                return
+            self.release_method = "SERVO"
+            self._release_warning = warning
+            self._drop_report_due = True
+            self.message = "Servo đã nhả hàng — đang báo hệ thống" + (f" ({warning})" if warning else "")
+
+    def _release_failed(self, code: str, error: str, attempts: int) -> None:
+        log.error("Không nhả được hàng: %s — %s (session=%s)", code, error, self._session_id)
+        self._release_error_code = code
+        self._release_error = error
+        self._release_attempts = attempts
+        self._drop_reports = 0
+        self._report_acked = False
+        self._drop_report_due = True
+        self._set(RELEASE_FAILED, f"Servo không nhả được hàng: {error}")
+
+    def _reset_release(self) -> None:
+        self._release_due = False
+        self._release_details = {}
+        self.release_method = None
+        self._release_attempts = 0
+        self._release_warning = None
+        self._release_error_code = None
+        self._release_error = None
+        self._report_acked = False
 
     def due_drop_report(self) -> Optional[dict]:
-        """Bản tin DROP_PHASE_COMPLETED khi đã giả lập nhả hàng đủ số giây (và gửi lại nếu backend chưa
-        xác nhận sau `response_timeout_s`, tối đa `max_requests` lần). None nếu chưa tới lúc."""
+        """Bản tin báo kết quả nhả hàng: DROP_PHASE_COMPLETED khi servo đã nhả xong (hoặc đã giả lập đủ số giây),
+        PARCEL_RELEASE_FAILED khi servo lỗi. Gửi lại nếu backend chưa xác nhận sau `response_timeout_s`, tối đa
+        `max_requests` lần. None nếu chưa tới lúc."""
         with self._lock:
             now = self._clock()
             waited = now - self._entered_at
             if self.target is None:
                 return None
+            failed = self.state == RELEASE_FAILED
             if self.state == DROPPING and waited >= (self.drop_simulation_s or 0):
                 self._drop_report_due = True
             elif self.state == DROP_REPORTED and waited >= self.response_timeout_s:
                 if self._drop_reports >= self.max_requests:
                     self._set(FAILED, f"Hệ thống không xác nhận báo nhả hàng sau {self._drop_reports} lần gửi")
+                    return None
+                self._drop_report_due = True
+            elif failed and not self._report_acked and self._drop_reports and waited >= self.response_timeout_s:
+                if self._drop_reports >= self.max_requests:
+                    # Giữ RELEASE_FAILED (không quét lại): kiện còn trên drone, KTV phải xử lý.
+                    self._report_acked = True
+                    self.message = (f"Servo không nhả được hàng; hệ thống chưa xác nhận báo lỗi sau "
+                                    f"{self._drop_reports} lần gửi — kiện vẫn trên drone")
                     return None
                 self._drop_report_due = True
             if not self._drop_report_due:
@@ -381,15 +471,27 @@ class DeliveryTracker:
             target = self.target
             payload = {
                 "messageId": str(uuid.uuid4()),
-                "eventType": "DROP_PHASE_COMPLETED",
+                "eventType": "PARCEL_RELEASE_FAILED" if failed else "DROP_PHASE_COMPLETED",
                 "droneId": self.drone_id,
                 "orderId": target.order_id,
                 "lockerId": target.locker_id,
                 "mode": target.mode,
-                "dropSimulationSeconds": self.drop_simulation_s,
                 "attempt": self._drop_reports,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+            if failed:
+                payload.update(self._release_details)
+                payload.update({"errorCode": self._release_error_code, "errorMessage": self._release_error,
+                                "releaseAttempts": self._release_attempts})
+            else:
+                payload["releaseMethod"] = self.release_method or "SIMULATION"
+                if self.release_method == "SERVO":
+                    payload.update(self._release_details)
+                    payload["releaseAttempts"] = self._release_attempts
+                    if self._release_warning:
+                        payload["warning"] = self._release_warning
+                else:
+                    payload["dropSimulationSeconds"] = self.drop_simulation_s
             if self._session_id:
                 payload["sessionId"] = self._session_id
             if self._correlation_id:
@@ -398,17 +500,20 @@ class DeliveryTracker:
                 payload["missionId"] = target.mission_id
             if target.box_id is not None:
                 payload["compartmentId"] = target.box_id
-            log.info("DROP_PHASE_COMPLETED order=%s session=%s attempt=%d", target.order_id, self._session_id,
+            log.info("%s order=%s session=%s attempt=%d", payload["eventType"], target.order_id, self._session_id,
                      self._drop_reports)
             # _set đổi _entered_at kể cả khi gửi lại (cùng trạng thái) để hẹn giờ gửi lại tính từ lần này.
             self._entered_at = now
-            self._set(DROP_REPORTED, f"Đã báo nhả hàng xong (lần {self._drop_reports}), chờ tủ đóng nắp")
+            if failed:
+                self.message = f"Servo không nhả được hàng — đã báo hệ thống (lần {self._drop_reports}): {self._release_error}"
+            else:
+                self._set(DROP_REPORTED, f"Đã báo nhả hàng xong (lần {self._drop_reports}), chờ tủ đóng nắp")
             return payload
 
     def drop_report_failed(self) -> None:
         """Không gửi được báo cáo (MQTT mất kết nối): thử lại ở vòng kế tiếp, không tính lượt."""
         with self._lock:
-            if self.state == DROP_REPORTED:
+            if self.state in (DROP_REPORTED, RELEASE_FAILED):
                 self._drop_reports = max(0, self._drop_reports - 1)
                 self._drop_report_due = True
 
@@ -435,6 +540,9 @@ class DeliveryTracker:
                 self._set(SCANNING, "Chưa có phản hồi — quét lại để gửi lần nữa")
         elif self.state in (VALIDATED, LID_OPENING) and waited >= self.lid_timeout_s:
             self._set(FAILED, "Quá lâu chưa thấy tủ báo nắp đã mở")
+        elif self.state == RELEASING and not self._drop_report_due and waited >= RELEASE_TIMEOUT_S:
+            self._release_failed("SERVO_TIMEOUT", f"servo chưa xong sau {RELEASE_TIMEOUT_S:.0f} giây",
+                                 self._release_attempts)
         elif self.state == FAILED and self.target is not None and waited >= (
                 self.exhausted_cooldown_s if self._exhausted else self.cooldown_s):
             # COMPLETED thì không quét lại: chờ backend báo NO_TARGET / nhiệm vụ mới.
@@ -477,5 +585,8 @@ class DeliveryTracker:
                 "requests": self._requests,
                 "lidConfirmation": self.lid_confirmation,
                 "dropSimulationSeconds": self.drop_simulation_s,
+                "servoReleaseEnabled": self.servo_enabled,
+                "releaseMethod": self.release_method,
+                "releaseError": self._release_error,
                 "secondsInState": round(self._clock() - self._entered_at, 1),
             }

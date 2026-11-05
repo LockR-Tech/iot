@@ -20,6 +20,7 @@ from lockr_drone.state import DroneState
 from lockr_drone.telemetry import build_payload, link_state
 from lockr_drone.camera import CameraStreamerServer
 from lockr_drone.delivery import DeliveryTracker
+from lockr_drone.release import ServoReleaser, gpio_backend_available
 
 log = logging.getLogger("bridge")
 SUMMARY_EVERY_S = 60
@@ -63,7 +64,35 @@ def main() -> int:
         lid_timeout_s=settings.delivery_lid_timeout_s,
         max_requests=settings.delivery_max_requests,
         target_poll_s=settings.target_poll_s,
+        servo_enabled=settings.servo_release_enabled,
     )
+
+    # Servo nhả hàng: tủ báo nắp đã mở ⇒ backend gửi lệnh nhả ⇒ quay servo ở luồng riêng (xem lockr_drone/release.py).
+    releaser = None
+    if settings.servo_release_enabled:
+        import servo as servo_hw   # servo.py cạnh main.py: điều khiển MG996R qua lgpio / gpiozero / gpiod
+
+        gpio = gpio_backend_available()   # gửi kèm báo cáo nhả hàng để nhật ký biết servo chạy bằng thư viện nào
+        if gpio is None:
+            log.error("SERVO_RELEASE_ENABLED=true nhưng Python đang chạy không có lgpio/gpiozero/gpiod — lệnh nhả "
+                      "hàng sẽ báo lỗi. Tạo venv bằng --system-site-packages hoặc cài python3-lgpio (README § Servo).")
+        else:
+            log.info("Servo nhả hàng: GPIO%d, mở %.0f°, khoá %.0f°, giữ %.1f giây (thư viện %s)",
+                     settings.servo_gpio_pin, settings.servo_open_angle, settings.servo_lock_angle,
+                     settings.servo_hold_s, gpio)
+        releaser = ServoReleaser(
+            move=lambda angle: servo_hw.set_servo_angle(angle, pin=settings.servo_gpio_pin,
+                                                        hold_s=settings.servo_move_s),
+            open_angle=settings.servo_open_angle,
+            lock_angle=settings.servo_lock_angle,
+            hold_s=settings.servo_hold_s,
+            attempts=settings.servo_release_attempts,
+        )
+
+    def run_release() -> None:
+        result = releaser.release()
+        tracker.release_finished(result.ok, result.attempts, result.error, result.warning,
+                                 releaser.details(result, settings.servo_gpio_pin, gpio))
 
     def publish_delivery(payload: dict) -> bool:
         if publisher is None:
@@ -103,11 +132,13 @@ def main() -> int:
     try:
         while not stop.wait(settings.publish_interval_s):
             tracker.tick()
+            if releaser is not None and tracker.claim_release():
+                threading.Thread(target=run_release, name="servo-release", daemon=True).start()
             if publisher is not None and publisher.connected:
                 request = tracker.due_target_request()
                 if request:
                     publish_delivery(request)
-                # Lệnh nhả hàng (demo): giả lập đủ số giây cấu hình rồi báo backend đã nhả xong.
+                # Kết quả nhả hàng (servo hoặc giả lập demo): báo backend để đóng nắp.
                 report = tracker.due_drop_report()
                 if report and not publish_delivery(report):
                     tracker.drop_report_failed()

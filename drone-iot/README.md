@@ -4,10 +4,11 @@ Chạy trên Raspberry Pi gắn trên drone: đọc MAVLink từ autopilot (Ardu
 
 Hợp đồng topic/payload/chữ ký: `../../docs/01-overview/drone-telemetry-contract.md`.
 
-**Chỉ đọc.** Thứ duy nhất gửi xuống autopilot là yêu cầu tần suất message. Không arm, không đổi mode, không điều khiển servo.
+**Chỉ đọc với autopilot.** Thứ duy nhất gửi xuống autopilot là yêu cầu tần suất message. Không arm, không đổi mode.
+Servo nhả hàng nối thẳng vào GPIO của Pi (không qua autopilot) — xem § Servo nhả hàng.
 
 **Giao hàng ArUco (`lockr/drone/delivery/events` ↔ `…/commands`) bắt buộc `DEVICE_KEY`.** Sự kiện gửi lên
-(`MARKER_DETECTED`, `DROP_PHASE_COMPLETED`) được ký như telemetry; backend bỏ bản tin không ký, ký sai drone,
+(`MARKER_DETECTED`, `DROP_PHASE_COMPLETED`, `PARCEL_RELEASE_FAILED`) được ký như telemetry; backend bỏ bản tin không ký, ký sai drone,
 lệch giờ quá 120 giây (Pi phải đồng bộ NTP) hoặc trùng `messageId`. Ngược lại Pi chỉ làm theo lệnh backend ký
 bằng khoá của chính drone này; thiếu `DEVICE_KEY` thì mọi lệnh giao hàng bị bỏ.
 
@@ -83,12 +84,17 @@ mới gửi lệnh mở **nắp trượt** — không phải lệnh mở cửa �
 | Camera thấy đúng mã ổn định | `lockr/drone/delivery/events` | `MARKER_DETECTED: missionId, orderId, lockerId, compartmentId, arucoMarkerId, sessionId, stableFrames, stableSeconds, distanceM` |
 | Backend → tủ | `cabinet/{lockerId}/command/open` (QoS 1, **không retained**) | `commandId, boxId, lid: true, action: OPEN, source: DRONE_DELIVERY, issuedAt, expiresAt` |
 | Tủ trả lời (2 lần) | `cabinet/{lockerId}/command/open/result` | `ACCEPTED, hwState=MOVING` → `SUCCESS/FAILED, hwState, errorCode, lidConfirmation` |
-| Backend → Pi | `lockr/drone/delivery/commands` | `MARKER_VALIDATED` → `LID_OPENING` → `LID_OPENED (lidConfirmation, dropSimulationSeconds)` hoặc `LID_OPEN_FAILED` / `MARKER_REJECTED` / `SAFETY_ABORT` → `DELIVERY_READY` |
+| Backend → Pi | `lockr/drone/delivery/commands` | `MARKER_VALIDATED` → `LID_OPENING` → `LID_OPENED (lidConfirmation, parcelRelease, dropSimulationSeconds chỉ đơn DEMO)` hoặc `LID_OPEN_FAILED` / `MARKER_REJECTED` / `SAFETY_ABORT` |
+| Pi nhả hàng xong | `lockr/drone/delivery/events` | `DROP_PHASE_COMPLETED: sessionId, releaseMethod (SERVO \| SIMULATION), releaseAttempts` |
+| Servo không nhả được | `lockr/drone/delivery/events` | `PARCEL_RELEASE_FAILED: sessionId, errorCode (SERVO_ERROR \| SERVO_TIMEOUT \| SERVO_DISABLED), errorMessage` |
+| Backend → Pi | `lockr/drone/delivery/commands` | `LID_CLOSING` (đã nhận báo cáo, tủ đang đóng nắp) → `DELIVERY_READY`, hoặc `PARCEL_RELEASE_FAILED` khi servo lỗi |
 
 Trạng thái trên HUD và `/api/status → arucoVision.delivery.state`:
 `NO_TARGET` (không có nhiệm vụ — không gửi gì) → `SCANNING` → `STABILIZING` → `REQUEST_SENT` (đã gửi) →
-`VALIDATED` (backend đã gửi lệnh cho tủ) → `LID_OPENING` (**tủ đã nhận lệnh**) → `LID_OPEN` (**tủ báo nắp đã mở**)
-→ `COMPLETED`; lỗi thì `FAILED` rồi quét lại sau 5 giây (hết lượt gửi vì không có phản hồi: sau 120 giây).
+`VALIDATED` (backend đã gửi lệnh cho tủ) → `LID_OPENING` (**tủ đã nhận lệnh**) → `RELEASING` (**servo nhả hàng**;
+Pi chưa bật servo thì `DROPPING` giả lập cho đơn DEMO) → `DROP_REPORTED` → `LID_CLOSING` → `COMPLETED`; lỗi thì
+`FAILED` rồi quét lại sau 5 giây (hết lượt gửi vì không có phản hồi: sau 120 giây). Servo lỗi thì `RELEASE_FAILED`
+và **không** tự quét lại: kiện còn trên drone, KTV drone xử lý đơn.
 
 Quy tắc an toàn:
 
@@ -102,13 +108,40 @@ Quy tắc an toàn:
 - `lidConfirmation`: `LIMIT_SWITCH` = công tắc hành trình xác nhận mở hoàn toàn; `STEP_COUNT` = nắp đã chạy hết số
   bước nhưng **chưa có cảm biến xác nhận** (tủ hiện tại chưa nối công tắc). Pi tủ bật `LID_BYPASS_PHYSICAL_MOTION`
   (giả lập) thì backend **không** coi là đã mở.
-- Nhận diện marker và mở nắp **không** điều khiển drone đáp hay nhả hàng. Ở chế độ demo trong nhà, việc nhả hàng
-  được giả lập trong số giây admin đặt ở *Thời gian giả lập drone nhả hàng (giây)*; nắp vẫn mở/đóng thật.
+- Nhận diện marker và mở nắp **không** điều khiển drone đáp. Pi chỉ nhả hàng khi backend gửi lệnh nhả kèm
+  `LID_OPENED` (tủ đã báo nắp mở); lệnh lặp không làm servo quay lần hai.
+- Pi chưa bật servo (`SERVO_RELEASE_ENABLED=false`): đơn DEMO giả lập nhả hàng trong số giây admin đặt ở
+  *Thời gian giả lập drone nhả hàng (giây)*; đơn giao thật báo `PARCEL_RELEASE_FAILED` (`SERVO_DISABLED`) để tủ
+  đóng nắp thay vì để nắp mở mãi.
+
+## Servo nhả hàng
+
+Servo MG996R giữ chốt kiện dưới bụng drone, đấu vào chân 12 (GPIO18) — sơ đồ ở đầu `servo.py`. Tủ báo nắp đã mở ⇒
+backend gửi `LID_OPENED` kèm `parcelRelease` ⇒ Pi quay servo tới `SERVO_OPEN_ANGLE`, giữ `SERVO_HOLD_S` giây cho kiện
+rơi, quay về `SERVO_LOCK_ANGLE` ⇒ báo `DROP_PHASE_COMPLETED` ⇒ backend ra lệnh tủ đóng nắp ⇒ đơn sẵn sàng lấy hàng.
+Servo chạy ở luồng riêng (`lockr_drone/release.py`), không chặn camera hay MQTT.
+
+- Không quay được servo trước khi chốt mở (thiếu thư viện GPIO, chân bị chiếm…) ⇒ thử lại, tổng
+  `SERVO_RELEASE_ATTEMPTS` lần, rồi báo `PARCEL_RELEASE_FAILED`. Backend đóng nắp cho an toàn, phiên kết thúc ở
+  `PARCEL_RELEASE_FAILED`, đơn **không** được coi là đã vào ô và không được tự giao lại; KTV drone báo thất bại hoặc
+  đưa kiện về như các sự cố khác.
+- Chốt đã mở nhưng không đóng lại được ⇒ kiện đã rơi: vẫn báo nhả xong, kèm `warning` để KTV kiểm tra chốt.
+- Không có cảm biến xác nhận kiện đã rời móc: "nhả xong" = servo đã mở rồi đóng không lỗi.
+
+Bật trên Pi (`.env`): `SERVO_RELEASE_ENABLED=true`, chỉnh góc theo cơ khí thật bằng `python3 servo.py open|close|90`
+trước. Dịch vụ chạy bằng `.venv/bin/python`, nên venv phải thấy thư viện GPIO của hệ thống — log lúc khởi động báo
+`Servo nhả hàng: GPIO18 … (thư viện lgpio)`; nếu báo thiếu thư viện:
+
+```bash
+sudo apt install -y python3-lgpio
+python3 -m venv --system-site-packages .venv && .venv/bin/pip install -r requirements.txt
+sudo usermod -aG gpio lockr      # user của dịch vụ được dùng GPIO
+```
 
 Chạy thử không cần phần cứng:
 
 ```bash
-.venv/bin/python -m unittest tests.test_delivery_tracker tests.test_camera_aruco_pipeline -v
+.venv/bin/python -m unittest tests.test_delivery_tracker tests.test_servo_release tests.test_camera_aruco_pipeline -v
 ```
 
 `test_camera_aruco_pipeline` dựng ảnh ArUco bằng OpenCV và chạy đúng hàm xử lý frame của camera
