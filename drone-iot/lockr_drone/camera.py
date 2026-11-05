@@ -270,11 +270,13 @@ class CameraCapture:
             "VALIDATED":    ("TARGET VERIFIED",  (0, 255, 0)),     # Green
             "LID_OPENING":  ("LID OPENING",      (255, 180, 50)),  # Light Blue
             "LID_OPEN":     ("LID OPEN",         (255, 180, 50)),  # Light Blue
+            "RELEASING":    ("RELEASING CARGO",  (0, 165, 255)),   # Orange
             "DROPPING":     ("DROPPING CARGO",   (0, 165, 255)),   # Orange
             "DROP_REPORTED": ("DROP REPORTED",   (0, 165, 255)),   # Orange
             "LID_CLOSING":  ("LID CLOSING",      (255, 180, 50)),  # Light Blue
             "COMPLETED":   ("COMPLETED",        (0, 255, 0)),     # Green
             "FAILED":       ("FAILED",           (0, 0, 255)),     # Red
+            "RELEASE_FAILED": ("RELEASE FAILED", (0, 0, 255)),     # Red
         }
         label, state_color = state_configs.get(self.state, (self.state, (200, 200, 200)))
 
@@ -319,6 +321,8 @@ class CameraCapture:
             "LID_CLOSING": "Drop done - locker closing lid",
             "COMPLETED": "Delivery completed - lid closed",
             "FAILED": "Lid request failed - see status",
+            "RELEASING": "Lid open - servo releasing cargo",
+            "RELEASE_FAILED": "Servo release failed - cargo still on drone",
         }.get(self.state)
         if self.state == "LID_OPEN":
             confirmed = snap.get("lidConfirmation") != "STEP_COUNT"
