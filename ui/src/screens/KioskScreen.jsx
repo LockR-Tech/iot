@@ -1634,20 +1634,35 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
     );
   }
 
+  // RENTAL_ACCESS: mở ô KHÔNG kết thúc thuê (backend chỉ kết thúc qua end-rental-with-code). Trước đây nút
+  // chính là "Đóng cửa, tiếp tục thuê" (icon ổ khoá, tiêu đề "Đã mở khóa!") — khách tới lấy đồ bấm nút to
+  // nhất, đơn nằm lại STORING. Giờ nút chính là kết thúc thuê, có hỏi lại; nút giữ thuê nói rõ đơn chưa xong.
+  const endRental = async () => {
+    if (!(await ask('Bạn đã lấy hết đồ và đóng cửa ô? Kết thúc thuê sẽ trả ô lại cho hệ thống, mã mở ô hết hiệu lực.', {
+      tone: 'warn', title: 'Kết thúc thuê?', confirmText: 'Kết thúc thuê', cancelText: 'Chưa',
+    }))) return;
+    run('end', api.endRentalWithCode, 'Đã kết thúc thuê!', 'Đơn thuê đã hoàn tất, ô đã được trả lại. Cảm ơn bạn đã dùng Lock.R!');
+  };
+
   return (
     <div className="screen">
       <Header onBack={goHome} title={`Ô Tủ #${boxLabel}`} />
       <p className="subtitle" style={{ textAlign: 'center' }}>
-        Ô đã mở. Bạn vẫn đang thuê ô này — lấy hoặc cất đồ rồi đóng cửa.
+        Ô đã mở. Lấy hết đồ thì bấm <strong>kết thúc thuê</strong> để hoàn tất đơn — chỉ mở ô thôi thì đơn vẫn đang thuê.
       </p>
       <div style={panel}>
-        <Btn
-          onClick={() => showSuccess('Đã mở khóa!', 'Nhớ đóng cửa ô. Mã PIN vẫn dùng được tới khi hết hạn thuê.', { boxNumber: boxLabel })}
-          disabled={!!loading}>
-          <Unlock size={18} /> Đóng cửa, tiếp tục thuê
-        </Btn>
-        <Btn variant="secondary" onClick={() => run('end', api.endRentalWithCode, 'Đã kết thúc thuê!')} loading={loading === 'end'}>
+        <Btn onClick={endRental} loading={loading === 'end'}>
           <LogOut size={18} /> Lấy hết đồ &amp; kết thúc thuê
+        </Btn>
+        <Btn
+          variant="secondary"
+          onClick={() => showSuccess(
+            'Vẫn đang thuê ô',
+            'Đơn thuê chưa kết thúc. Nhớ đóng cửa ô; mã mở ô vẫn dùng được tới khi hết hạn thuê. Khi lấy hết đồ, nhập lại mã và chọn "kết thúc thuê".',
+            { boxNumber: boxLabel },
+          )}
+          disabled={!!loading}>
+          <Unlock size={18} /> Chỉ lấy/cất đồ — tiếp tục thuê
         </Btn>
         {msg && <Msg type="error" text={msg} />}
       </div>
