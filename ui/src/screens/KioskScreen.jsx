@@ -695,7 +695,61 @@ function boxPlacement(boxes) {
     cols = Math.max(cols, col);
     rows = Math.max(rows, row + span - 1);
   }
-  return { cols, rows, place };
+  // Ô lưới không có cửa tủ (vd chỗ đặt màn hình cảm ứng của CAB-TU01) ⇒ vẽ tấm panel thay vì để trống.
+  const empty = [];
+  for (let r = 1; r <= rows; r++) {
+    for (let c = 1; c <= cols; c++) if (!taken.has(`${r}:${c}`)) empty.push({ r, c });
+  }
+  // Ô drone nằm dưới bãi đáp trên nóc ⇒ vẽ dải "Bãi đáp drone" phủ đúng các cột đó.
+  const droneCols = boxes.filter(b => b.cellType === 'DRONE').map(b => b.colIndex - minCol + 1);
+  const pad = droneCols.length ? [Math.min(...droneCols), Math.max(...droneCols)] : null;
+  return { cols, rows, place, empty, pad };
+}
+
+/** Khung tủ giống tủ thật: thân màu than chì, bãi đáp drone trên nóc, ô lưới không có cửa (chỗ màn hình) thành tấm Lock.R. */
+function Cabinet({ layout, children }) {
+  if (!layout) return <div className="box-grid auto">{children}</div>;
+  return (
+    <div className="cabinet" style={{ '--cols': layout.cols, '--rows': layout.rows }}>
+      {layout.pad && (
+        <div className="cabinet-roof">
+          <div className="landing-pad" style={{ gridColumn: `${layout.pad[0]} / ${layout.pad[1] + 1}` }}>
+            <Plane size={13} /> Bãi đáp drone
+          </div>
+        </div>
+      )}
+      <div className="cabinet-body">
+        <div className="box-grid by-layout">
+          {layout.empty.map(({ r, c }) => (
+            <div key={`panel-${r}-${c}`} className="cabinet-panel" style={{ gridRow: r, gridColumn: c }}>
+              <strong>Lock<span>.</span>R</strong>
+              <small><Smartphone size={11} /> Màn hình kiosk</small>
+            </div>
+          ))}
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Nội dung một cửa ô: số ô lớn, biểu tượng loại ô, nhãn trạng thái có đèn báo. */
+function DoorFace({ box, statusText, selected }) {
+  const isDrone = box.cellType === 'DRONE' || box.type === 'DRONE';
+  const isBig = ['LUGGAGE', 'XL'].includes(box.cellType) || box.type === 'LUGGAGE';
+  const Icon = isDrone ? Plane : isBig ? Luggage : Package;
+  return (
+    <>
+      <span className="door-head">
+        <span className="box-number"><small>Ô</small>{box.boxNumber}</span>
+        <Icon className="door-icon" size={20} />
+      </span>
+      {isBig && <span className="door-kind">Ô lớn · vali</span>}
+      {isDrone && <span className="door-kind">Nhận hàng drone</span>}
+      <span className="box-status"><i className="led" />{statusText}</span>
+      {selected && <CheckCircle className="door-check" size={22} />}
+    </>
+  );
 }
 
 function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelectedBox, lockerInfo, activeLockerId, onReportBox }) {
@@ -891,7 +945,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
           {loading && displayBoxes.length === 0 && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />Đang tải...</p>}
           {msg && !loading && <Msg type="error" text={msg} />}
 
-          <div className={`box-grid ${layout ? 'by-layout' : 'auto'}`} style={layout ? { '--cols': layout.cols, '--rows': layout.rows } : undefined}>
+          <Cabinet layout={layout}>
         {orderedBoxes.map(box => {
           const myOrder = myOrders.find(o =>
             isActiveManageableOrder(o)
@@ -928,22 +982,18 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
           }
 
           const sel = selectedBox?.boxId === box.boxId;
-          const BoxIcon = isDrone ? Plane : 
-                          ['LUGGAGE', 'XL'].includes(box.cellType) || box.type === 'LUGGAGE' ? Luggage : Package;
 
           return (
-            <button key={box.boxId} 
+            <button key={box.boxId}
               onClick={() => handleBoxClick(box, isAvail, myOrder)}
               disabled={!isAvail && !myOrder}
               style={layout?.place.get(box.boxId)}
               className={`box-item ${boxClass} ${sel ? 'selected' : ''}`}>
-              <div className="box-icon"><BoxIcon size={28} /></div>
-              <div className="box-number">Ô {box.boxNumber}</div>
-              <div className="box-status">{statusText}</div>
+              <DoorFace box={box} statusText={sel ? 'Đang chọn' : statusText} selected={sel} />
             </button>
           );
         })}
-          </div>
+          </Cabinet>
         </section>
       </div>
 
@@ -1815,23 +1865,22 @@ function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initi
             </button>
           </div>
           {loading && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />Đang tải...</p>}
-          <div className={`box-grid ${layout ? 'by-layout' : 'auto'}`} style={layout ? { '--cols': layout.cols, '--rows': layout.rows } : undefined}>
+          <Cabinet layout={layout}>
             {ordered.map(box => {
               const isDrone = box.cellType === 'DRONE';
-              const BoxIcon = isDrone ? Plane : ['LUGGAGE', 'XL'].includes(box.cellType) ? Luggage : Package;
               const status = String(box.status || '').toUpperCase();
               const already = ['FAULT', 'PENDING_CHECK'].includes(status);
+              const sel = target === box.boxId;
               return (
                 <button key={box.boxId} style={layout?.place.get(box.boxId)}
-                  className={`box-item report-box ${target === box.boxId ? 'selected' : ''} ${already ? 'reported' : ''}`}
+                  className={`box-item report-box ${sel ? 'selected' : ''} ${already ? 'reported' : ''}`}
                   onClick={() => setTarget(box.boxId)}>
-                  <div className="box-icon"><BoxIcon size={26} /></div>
-                  <div className="box-number">Ô {box.boxNumber}</div>
-                  <div className="box-status">{target === box.boxId ? 'Đã chọn' : already ? 'Đã có báo lỗi' : isDrone ? 'Ô drone' : 'Chạm để chọn'}</div>
+                  <DoorFace box={box} selected={sel}
+                    statusText={sel ? 'Đã chọn' : already ? 'Đã có báo lỗi' : isDrone ? 'Ô drone' : 'Chạm để chọn'} />
                 </button>
               );
             })}
-          </div>
+          </Cabinet>
         </section>
       </div>
     </div>
