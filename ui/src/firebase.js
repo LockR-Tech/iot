@@ -22,6 +22,10 @@ let auth = null;
 try {
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
+  // SMS OTP của Firebase là mẫu cố định của Google, không sửa được câu chữ — chỉ chọn được ngôn ngữ.
+  // 'vi' ⇒ SMS tiếng Việt kèm tên hiển thị của project (Firebase Console → Project settings →
+  // Public-facing name = "Lock.R").
+  auth.languageCode = 'vi';
 } catch (err) {
   console.warn('[firebase] Chưa cấu hình Firebase Web app — đăng nhập bằng số điện thoại sẽ không dùng được:', err.message);
 }
