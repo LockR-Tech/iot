@@ -1278,3 +1278,113 @@ html, body, #root {
 .osk-open .screen.screen-boxes, .osk-open .screen.screen-order { overflow-y: auto; }
 .osk-open .boxes-layout, .osk-open .order-layout { flex: 0 0 auto; height: 450px; }
 .success-row:last-child { border-bottom: 0; padding-bottom: 0; }
+
+/* ─── Sơ đồ tủ giống tủ thật (Cabinet / DoorFace trong KioskScreen) ─────────────────────────
+   Thân tủ màu than chì như tủ ngoài đời, mỗi ô là một cánh cửa xám sáng có tay nắm; số ô to ở góc,
+   nhãn trạng thái có đèn báo. Ô lưới không có cửa (chỗ màn hình cảm ứng) là tấm logo; dải "Bãi đáp
+   drone" phủ đúng các cột ô drone. Chỉ áp trong .cabinet — lưới tự xếp (.box-grid.auto) giữ kiểu cũ. */
+.cabinet {
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
+  width: 100%; max-width: calc(var(--cols) * 172px + 24px); margin: 0 auto;
+}
+.cabinet-roof { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 8px; padding: 0 12px; }
+.landing-pad {
+  height: 24px; border-radius: 8px 8px 0 0; border-top: 3px solid #facc15;
+  background: repeating-linear-gradient(135deg, #1f2328 0 10px, #2a2f35 10px 20px);
+  color: #fde68a; font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.cabinet-body {
+  flex: 1; min-height: 0; display: flex; padding: 10px; border-radius: 14px;
+  background: linear-gradient(180deg, #3b4149 0%, #2a2f36 100%);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.boxes-main .cabinet .box-grid.by-layout,
+.cabinet .box-grid.by-layout {
+  flex: 1; margin: 0; padding: 0; max-width: none; min-height: 0; gap: 8px;
+  grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+}
+.cabinet-panel {
+  border-radius: 8px; border: 1px solid #0b1120; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(120% 120% at 30% 15%, #1e3a8a 0%, #0f172a 72%);
+  box-shadow: inset 0 0 0 3px #1f2937;
+}
+.cabinet-panel { flex-direction: column; gap: 4px; color: #e0e7ff; }
+.cabinet-panel strong { font-size: 20px; font-weight: 800; letter-spacing: 0.02em; }
+.cabinet-panel strong span { color: #60a5fa; }
+.cabinet-panel small { font-size: 10.5px; font-weight: 600; color: #93c5fd; opacity: 0.85; display: inline-flex; align-items: center; gap: 4px; }
+
+/* Cửa ô — padding/gap cần selector dài để thắng `.box-grid.by-layout .box-item` cũ; phần hình thức để ở
+   `.cabinet .box-item` (độ ưu tiên thấp hơn) để các luật trạng thái bên dưới (selected, yours…) đè được. */
+.cabinet .box-grid.by-layout .box-item { gap: 4px; padding: 10px 18px 10px 12px; justify-content: space-between; }
+.cabinet .box-item {
+  position: relative; display: flex; flex-direction: column; align-items: stretch; justify-content: space-between;
+  border-radius: 8px; text-align: left;
+  border: 1px solid #c4c8ce; color: #334155; opacity: 1; filter: none; transform: none;
+  background: linear-gradient(180deg, #f7f7f5 0%, #e6e6e2 100%);
+  box-shadow: inset 0 1px 0 #ffffff, 0 2px 0 rgba(0, 0, 0, 0.28);
+}
+.cabinet .box-item::after {   /* tay nắm cửa */
+  content: ''; position: absolute; right: 7px; top: 50%; width: 4px; height: 26px; margin-top: -13px;
+  border-radius: 3px; background: linear-gradient(90deg, #8f969f, #c9cdd3);
+}
+.door-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.cabinet .box-number,
+.cabinet .box-grid.by-layout .box-number { font-size: 26px; font-weight: 800; line-height: 1; color: #1f2937; margin: 0; }
+.cabinet .box-number small { font-size: 12px; font-weight: 700; color: #64748b; margin-right: 3px; vertical-align: 3px; }
+.door-icon { color: #94a3b8; flex-shrink: 0; }
+.door-kind { font-size: 11px; font-weight: 700; color: #64748b; margin-top: auto; }
+.cabinet .box-status,
+.cabinet .box-grid.by-layout .box-status {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-size: 11.5px; font-weight: 700; padding: 3px 10px 3px 8px; border-radius: 999px;
+  background: #e2e8f0; color: #475569;
+}
+.cabinet .box-status .led { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.door-check { position: absolute; top: -9px; right: -9px; color: #fff; background: #2563eb; border-radius: 50%; box-shadow: 0 0 0 3px #2a2f36; }
+
+/* Trạng thái */
+.cabinet .box-item.available .box-status { background: #dcfce7; color: #15803d; }
+.cabinet .box-item.available .box-status .led { box-shadow: 0 0 6px #22c55e; }
+.cabinet .box-item.available .door-icon { color: #16a34a; }
+.cabinet .box-item.available:not(:disabled):not(.selected):hover { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3), 0 2px 0 rgba(0, 0, 0, 0.28); }
+.cabinet .box-item.selected,
+.cabinet .box-item.report-box.selected {
+  border-color: #2563eb; transform: none;
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+  box-shadow: 0 0 0 3px #3b82f6, 0 10px 22px rgba(37, 99, 235, 0.4);
+}
+.cabinet .box-item.selected .box-status { background: #2563eb; color: #fff; }
+.cabinet .box-item.selected .door-icon { color: #2563eb; }
+.cabinet .box-item.yours { border-color: #60a5fa; background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%); cursor: pointer; }
+.cabinet .box-item.yours .box-status { background: #3b82f6; color: #fff; }
+.cabinet .box-item.yours .door-icon { color: #3b82f6; }
+.cabinet .box-item.rented { background: linear-gradient(180deg, #eceae5 0%, #dcdad3 100%); }
+.cabinet .box-item.rented .box-status { background: #fef3c7; color: #b45309; }
+.cabinet .box-item.rented .door-icon { color: #d97706; }
+.cabinet .box-item.booked .box-status { background: #ede9fe; color: #6d28d9; }
+.cabinet .box-item.drone { border-color: #a5b4fc; background: linear-gradient(180deg, #eef2ff 0%, #dfe5ff 100%); }
+.cabinet .box-item.drone .box-status { background: #c7d2fe; color: #3730a3; }
+.cabinet .box-item.drone .door-icon { color: #6366f1; }
+.cabinet .box-item.offline { background: repeating-linear-gradient(135deg, #ecebe6 0 9px, #dfdeda 9px 18px); }
+.cabinet .box-item.offline .box-status { background: #fee2e2; color: #b91c1c; }
+.cabinet .box-item.offline .box-number { color: #94a3b8; }
+.cabinet .box-item.offline .door-icon { color: #ef4444; }
+.cabinet .box-item:disabled:hover { transform: none; }
+
+/* Màn báo ô hư: ô đã có báo lỗi viền đỏ, ô đang chọn viền đỏ */
+.cabinet .box-item.report-box .box-status { background: #e2e8f0; color: #475569; }
+.cabinet .box-item.report-box.reported { border-color: #fca5a5; }
+.cabinet .box-item.report-box.reported .box-status { background: #fee2e2; color: #b91c1c; }
+.cabinet .box-item.report-box.selected { border-color: #dc2626; background: linear-gradient(180deg, #fef2f2 0%, #fee2e2 100%); box-shadow: 0 0 0 3px #ef4444, 0 10px 22px rgba(220, 38, 38, 0.35); }
+.cabinet .box-item.report-box.selected .box-status { background: #dc2626; color: #fff; }
+.cabinet .box-item.report-box.selected .door-check { background: #dc2626; }
+.cabinet .box-item.report-box.selected .door-icon { color: #dc2626; }
+
+/* Chú thích màu khớp đèn báo */
+.box-legend .lg { width: 10px; height: 10px; border-radius: 50%; border: none; }
+.box-legend .lg.available { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+.box-legend .lg.selected { background: #2563eb; }
+.box-legend .lg.rented { background: #f59e0b; }
+.box-legend .lg.drone { background: #6366f1; }
+.box-legend .lg.offline { background: #ef4444; }
