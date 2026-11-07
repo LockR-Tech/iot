@@ -1905,12 +1905,17 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
     return box ? box.boxNumber : boxId;
   };
 
-  const submitCode = async () => {
-    const accessCode = code.trim();
+  // Chặn gửi trùng: tự gửi khi đủ 6 số + Enter của máy quét / bấm nút có thể tới cùng lúc.
+  const submittingRef = useRef(false);
+
+  const submitCode = async (typed) => {
+    const accessCode = (typed ?? code).trim();
     if (accessCode.length < 6) {
       setMsg('Vui lòng nhập mã hợp lệ');
       return;
     }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
 
     setLoading(true); setMsg(''); setRetryable(false);
     try {
@@ -1945,6 +1950,7 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
       setRetryable(true);
       setMsg('Không kết nối được máy chủ, chưa kiểm tra được mã. Vui lòng thử lại.');
     }
+    submittingRef.current = false;
     setLoading(false);
   };
 
@@ -1977,9 +1983,13 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
           className="input"
           value={code}
           onChange={e => {
-            setCode(e.target.value);
+            const value = e.target.value;
+            setCode(value);
             setMsg('');
             setRetryable(false);
+            // Gõ đủ mã OTP/PIN 6 số là tự mở, không cần bấm "Mở khóa". Mã QR 'LLQR…' của máy quét
+            // không phải số nên vẫn đợi Enter như cũ.
+            if (/^\d{6}$/.test(value.trim())) submitCode(value);
           }}
           // Khách chỉ tự gõ PIN 6 số (cả mã uỷ quyền); mã QR 'LLQR…' do máy quét gõ như bàn phím thật,
           // nên bàn phím ảo hiện dạng số cho dễ bấm trên màn 7".
@@ -1999,7 +2009,7 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
       </div>
 
       <div style={{ maxWidth: 450, margin: '0 auto', width: '100%' }}>
-        <Btn onClick={submitCode} loading={loading} disabled={code.length < 6}>
+        <Btn onClick={() => submitCode()} loading={loading} disabled={code.length < 6}>
           {retryable
             ? <><RefreshCw size={18} /> Thử lại</>
             : <><Unlock size={18} /> Mở khóa</>}
