@@ -36,6 +36,8 @@ const NOT_CONFIGURED_MSG = 'Đăng nhập bằng số điện thoại chưa kh�
 // KHÔNG gắn vào nút "Gửi mã": gắn vào nút thì vừa reCAPTCHA vừa onClick cùng chạy, nút còn bị khoá và đổi
 // nội dung ngay khi bấm — mã reCAPTCHA bị chạy lại / mất ngữ cảnh và Firebase từ chối (auth/invalid-app-credential).
 // Mỗi lần gửi mã tạo verifier mới và dọn verifier cũ, nên bấm gửi lại sau lỗi không dùng lại mã reCAPTCHA đã hỏng.
+// Verifier mới luôn vẽ vào MỘT THẺ CON MỚI: grecaptcha nhớ thẻ đã từng vẽ, vẽ lại vào đúng thẻ cũ (kể cả sau
+// clear() và xoá innerHTML) ném "reCAPTCHA has already been rendered in this element".
 const RECAPTCHA_CONTAINER = 'recaptcha-container';
 
 function clearRecaptcha() {
@@ -43,14 +45,26 @@ function clearRecaptcha() {
     try { window.recaptchaVerifier.clear(); } catch { /* widget đã bị gỡ */ }
     window.recaptchaVerifier = null;
   }
-  const el = document.getElementById(RECAPTCHA_CONTAINER);
-  if (el) el.innerHTML = '';
+  const host = document.getElementById(RECAPTCHA_CONTAINER);
+  if (host) host.replaceChildren();
+}
+
+function freshRecaptchaElement() {
+  let host = document.getElementById(RECAPTCHA_CONTAINER);
+  if (!host) {   // phòng khi index.html thiếu vùng chứa
+    host = document.createElement('div');
+    host.id = RECAPTCHA_CONTAINER;
+    document.body.appendChild(host);
+  }
+  const el = document.createElement('div');
+  host.appendChild(el);
+  return el;
 }
 
 export function setupRecaptcha() {
   if (!auth) throw new Error(NOT_CONFIGURED_MSG);
   clearRecaptcha();
-  window.recaptchaVerifier = new RecaptchaVerifier(auth, RECAPTCHA_CONTAINER, { size: 'invisible' });
+  window.recaptchaVerifier = new RecaptchaVerifier(auth, freshRecaptchaElement(), { size: 'invisible' });
   return window.recaptchaVerifier;
 }
 
