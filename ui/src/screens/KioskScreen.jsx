@@ -28,6 +28,10 @@ const urlParams = new URLSearchParams(window.location.search);
 
 const LOCKER_CODE = urlParams.get('lockerCode') || import.meta.env.VITE_LOCKER_CODE || 'LOC-01-001';
 const INITIAL_LOCKER_ID = parseInt(urlParams.get('lockerId') || import.meta.env.VITE_LOCKER_ID || '1', 10);
+// Kiosk gắn liền một tủ (Pi của CAB-TU01): KHÔNG cho khách đổi sang tủ khác, cũng không tự nhảy sang tủ đầu
+// danh sách khi không thấy tủ đã cấu hình. Chạy thử trên laptop muốn chọn tủ: thêm ?chonTu=1 vào địa chỉ
+// hoặc đặt VITE_LOCKER_SELECTABLE=true.
+const LOCKER_SELECTABLE = urlParams.get('chonTu') === '1' || import.meta.env.VITE_LOCKER_SELECTABLE === 'true';
 const AUTO_HOME_SEC = 20;
 
 // ============================================
@@ -61,8 +65,9 @@ export default function KioskScreen() {
   const [reportBoxId, setReportBoxId] = useState(null);
   const cdRef = useRef(null);
 
-  // Fetch list of all lockers for dropdown
+  // Danh sách tủ cho ô chọn tủ — chỉ khi được phép chọn tủ (chạy thử), kiosk cố định một tủ thì bỏ qua.
   useEffect(() => {
+    if (!LOCKER_SELECTABLE) return;
     (async () => {
       try {
         const res = await api.getAllLockers();
@@ -296,20 +301,22 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
       </div>
 
       <div className="home-right">
-        <div className="home-config">
-          <MapPin size={18} color="var(--accent)" />
-          <select
-            value={activeLockerId}
-            onChange={e => setActiveLockerId(parseInt(e.target.value, 10))}
-            className="locker-select"
-          >
-            {allLockers.map(loc => (
-              <option key={loc.id} value={loc.id}>
-                {loc.name} - {loc.code}
-              </option>
-            ))}
-          </select>
-        </div>
+        {LOCKER_SELECTABLE && allLockers.length > 0 && (
+          <div className="home-config">
+            <MapPin size={18} color="var(--accent)" />
+            <select
+              value={activeLockerId}
+              onChange={e => setActiveLockerId(parseInt(e.target.value, 10))}
+              className="locker-select"
+            >
+              {allLockers.map(loc => (
+                <option key={loc.id} value={loc.id}>
+                  {loc.name} - {loc.code}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {lockerInfo && (
           <div className="locker-info-card">
