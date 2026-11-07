@@ -186,7 +186,8 @@ def main():
                                    settings.BACKEND_API_URL or DEFAULT_BACKEND,
                                    env_key=settings.BLE_PUBLIC_KEY)
         ble_gatt = BleGattService(cabinet_state, serial_manager, key_store,
-                                  name_fn=ble_service.resolve_device_name, control_log=control_log)
+                                  name_fn=ble_service.resolve_device_name, control_log=control_log,
+                                  require_door_sensor=lambda: settings.REQUIRE_DOOR_SENSOR)
         if not ble_gatt.start():
             ble_service.start()
     else:

@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -120,6 +121,54 @@ class ControlLogTest(unittest.TestCase):
         self.assertEqual(event["boxId"], 42)
         self.assertIn("120 ms", event["message"])
         self.assertIn("bảng kỹ thuật", event["message"])
+
+    def test_ble_open_event_carries_nonce_user_and_box(self):
+        """BOX_OPEN_BLE / BLE_REJECTED kèm nonce, userId, boxNumber (+ errorCode khi lỗi) — backend khớp
+        nonce với mã cấp cho đơn rồi chuyển trạng thái đơn (F3-G11). Relay thật qua GPIO giả, cửa kẹt."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from services.ble_gatt_service import BleGattService
+        from services.ble_open_token import PublicKeyStore
+        from tests.test_ble_open import make_token, raw_public
+
+        key = Ed25519PrivateKey.generate()
+        pins = FakePins()
+        locker = GpioLockerManager(pins, RELAYS, DOORS, unlock_ms=5, settle_ms=5,
+                                   close_wait_ms=1, poll_ms=10_000, debounce_ms=50).start()
+        locker.on_pulse = self.log.box_pulsed
+        service = BleGattService(mock.MagicMock(primary_locker_id="7"), locker,
+                                 PublicKeyStore("", "", env_key=raw_public(key)), name_fn=lambda: "x",
+                                 control_log=self.log, require_door_sensor=lambda: True)
+        try:
+            # Ô 3 (slot 2): cảm biến kéo lên = cửa mở ⇒ OK.
+            self.assertEqual("OK", service.handle_token(make_token(key, box=3, user=55, nonce=b"\xab" * 8))["result"])
+            # Ô 4 (slot 3): cảm biến vẫn báo cửa đóng sau khi kích relay ⇒ JAMMED.
+            pins.levels[DOORS[3]] = False
+            reply = service.handle_token(make_token(key, box=4, user=55, nonce=b"\xcd" * 8))
+            self.assertEqual({"nonce": "cd" * 8, "result": "FAIL", "box": 4, "error": "JAMMED"}, reply)
+            service.handle_token(make_token(Ed25519PrivateKey.generate(), box=5, user=56, nonce=b"\xef" * 8))
+        finally:
+            locker.close()
+
+        self.mqtt.is_connected = True
+        self.assertEqual(self.log.flush(), 3)               # relay BLE không ghi thêm dòng BOX_OPEN
+        ok, jam, rejected = self.mqtt.on(TOPIC)
+        self.assertEqual(("BOX_OPEN_BLE", "OK", "ab" * 8, 55, 3, 2, 40),
+                         (ok["action"], ok["status"], ok["nonce"], ok["userId"], ok["boxNumber"],
+                          ok["slotIndex"], ok["boxId"]))
+        self.assertNotIn("errorCode", ok)
+        self.assertEqual(("BOX_OPEN_BLE", "FAILED", "JAMMED", "cd" * 8, 55, 4),
+                         (jam["action"], jam["status"], jam["errorCode"], jam["nonce"], jam["userId"],
+                          jam["boxNumber"]))
+        self.assertEqual(("BLE_REJECTED", "FAILED", "BAD_SIGNATURE", "ef" * 8, 56, 5),
+                         (rejected["action"], rejected["status"], rejected["errorCode"], rejected["nonce"],
+                          rejected["userId"], rejected["boxNumber"]))
+        self.assertNotIn("slotIndex", rejected)
+
+    def test_events_without_ble_fields_keep_old_shape(self):
+        self.log.record("BOX_OPEN", "OK", slot_index=3, message="m")
+        (event,) = self.log.pending()
+        self.assertEqual({"eventId", "lockerId", "action", "status", "slotIndex", "boxId", "message", "occurredAt"},
+                         set(event))
 
 
 if __name__ == "__main__":
