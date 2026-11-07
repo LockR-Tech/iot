@@ -28,25 +28,71 @@ try {
 
 const NOT_CONFIGURED_MSG = 'Đăng nhập bằng số điện thoại chưa khả dụng trên kiosk này. Vui lòng dùng Email.';
 
-export function setupRecaptcha(buttonId) {
-  if (!auth) throw new Error(NOT_CONFIGURED_MSG);
+// reCAPTCHA ẩn gắn vào một div riêng (#recaptcha-container trong index.html, không bao giờ bị React gỡ),
+// KHÔNG gắn vào nút "Gửi mã": gắn vào nút thì vừa reCAPTCHA vừa onClick cùng chạy, nút còn bị khoá và đổi
+// nội dung ngay khi bấm — mã reCAPTCHA bị chạy lại / mất ngữ cảnh và Firebase từ chối (auth/invalid-app-credential).
+// Mỗi lần gửi mã tạo verifier mới và dọn verifier cũ, nên bấm gửi lại sau lỗi không dùng lại mã reCAPTCHA đã hỏng.
+const RECAPTCHA_CONTAINER = 'recaptcha-container';
+
+function clearRecaptcha() {
   if (window.recaptchaVerifier) {
-    window.recaptchaVerifier.clear();
+    try { window.recaptchaVerifier.clear(); } catch { /* widget đã bị gỡ */ }
     window.recaptchaVerifier = null;
   }
-  window.recaptchaVerifier = new RecaptchaVerifier(auth, buttonId, {
-    size: 'invisible',
-    callback: () => {},
-    'expired-callback': () => { window.recaptchaVerifier = null; },
-  });
+  const el = document.getElementById(RECAPTCHA_CONTAINER);
+  if (el) el.innerHTML = '';
+}
+
+export function setupRecaptcha() {
+  if (!auth) throw new Error(NOT_CONFIGURED_MSG);
+  clearRecaptcha();
+  window.recaptchaVerifier = new RecaptchaVerifier(auth, RECAPTCHA_CONTAINER, { size: 'invisible' });
   return window.recaptchaVerifier;
 }
 
+/** Gửi (hoặc gửi lại) SMS OTP. Trả ConfirmationResult để xác nhận mã. */
 export async function sendPhoneOtp(phoneNumber) {
   if (!auth) throw new Error(NOT_CONFIGURED_MSG);
-  const verifier = window.recaptchaVerifier;
-  if (!verifier) throw new Error('reCAPTCHA chưa được khởi tạo');
-  return signInWithPhoneNumber(auth, phoneNumber, verifier);
+  const verifier = setupRecaptcha();
+  try {
+    return await signInWithPhoneNumber(auth, phoneNumber, verifier);
+  } catch (err) {
+    clearRecaptcha();
+    throw err;
+  }
+}
+
+/** 0901234567 / 901234567 / +84901234567 → +84901234567 */
+export function toE164Vn(phone) {
+  const p = (phone || '').trim();
+  if (p.startsWith('0')) return '+84' + p.slice(1);
+  if (!p.startsWith('+')) return '+84' + p;
+  return p;
+}
+
+/** Thông báo tiếng Việt cho lỗi Firebase Auth thường gặp khi gửi / xác nhận OTP qua SMS. */
+export function phoneAuthMessage(err) {
+  switch (err?.code) {
+    case 'auth/invalid-app-credential':
+    case 'auth/captcha-check-failed':
+    case 'auth/missing-app-credential':
+      return 'Không xác minh được kiosk (reCAPTCHA). Vui lòng bấm gửi lại sau vài giây.';
+    case 'auth/too-many-requests':
+      return 'Số điện thoại này đã yêu cầu quá nhiều mã. Vui lòng thử lại sau ít phút hoặc dùng Email.';
+    case 'auth/quota-exceeded':
+      return 'Hệ thống tạm hết lượt gửi SMS. Vui lòng dùng Email.';
+    case 'auth/invalid-phone-number':
+    case 'auth/missing-phone-number':
+      return 'Số điện thoại không hợp lệ.';
+    case 'auth/network-request-failed':
+      return 'Mất kết nối mạng. Vui lòng thử lại.';
+    case 'auth/invalid-verification-code':
+      return 'Mã OTP không đúng. Vui lòng nhập lại hoặc bấm "Gửi lại mã".';
+    case 'auth/code-expired':
+      return 'Mã OTP đã hết hạn. Vui lòng bấm "Gửi lại mã".';
+    default:
+      return err?.message || 'Lỗi gửi OTP. Vui lòng thử lại.';
+  }
 }
 
 export { auth, RecaptchaVerifier, signInWithPhoneNumber };
