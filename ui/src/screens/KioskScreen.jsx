@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../api';
-import { setupRecaptcha, sendPhoneOtp } from '../firebase';
+import { sendPhoneOtp, toE164Vn, phoneAuthMessage } from '../firebase';
 import {
   Lock, Package, Smartphone, Mail, ArrowLeft, MapPin,
   CheckCircle, KeyRound, Hash, User, CreditCard,
@@ -381,20 +381,6 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
 function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, setPhone, loginMethod, setLoginMethod }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
-  const recaptchaReady = useRef(false);
-
-  useEffect(() => {
-    if (loginMethod === 'phone' && !recaptchaReady.current) {
-      try {
-        setupRecaptcha('phone-send-btn');
-        recaptchaReady.current = true;
-      } catch { /* button may not be in DOM yet */ }
-    }
-  }, [loginMethod]);
-
-  useEffect(() => {
-    if (loginMethod !== 'phone') recaptchaReady.current = false;
-  }, [loginMethod]);
 
   const handleSendEmail = async () => {
     if (!email || !email.includes('@')) { setMsg('Vui lòng nhập email hợp lệ'); return; }
@@ -412,21 +398,11 @@ function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, se
     if (!phone || phone.length < 9) { setMsg('Vui lòng nhập số điện thoại hợp lệ'); return; }
     setLoading(true); setMsg('');
     try {
-      if (!recaptchaReady.current) {
-        setupRecaptcha('phone-send-btn');
-        recaptchaReady.current = true;
-      }
-      let formatted = phone.trim();
-      if (formatted.startsWith('0')) formatted = '+84' + formatted.slice(1);
-      else if (!formatted.startsWith('+')) formatted = '+84' + formatted;
-
-      const confirmation = await sendPhoneOtp(formatted);
-      window.confirmationResult = confirmation;
+      window.confirmationResult = await sendPhoneOtp(toE164Vn(phone));
       go('phone-otp');
     } catch (err) {
       console.error('Firebase phone OTP error:', err);
-      setMsg(err.message || 'Lỗi gửi OTP. Vui lòng thử lại.');
-      recaptchaReady.current = false;
+      setMsg(phoneAuthMessage(err));
     }
     setLoading(false);
   };
@@ -455,7 +431,7 @@ function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, se
               placeholder="0901234567" inputMode="tel" autoComplete="tel"
               onKeyDown={e => e.key === 'Enter' && handleSendPhone()} />
           </div>
-          <Btn id="phone-send-btn" onClick={handleSendPhone} loading={loading}><Smartphone size={18} /> Gửi mã OTP</Btn>
+          <Btn onClick={handleSendPhone} loading={loading}><Smartphone size={18} /> Gửi mã OTP</Btn>
         </>
       ) : (
         <>
@@ -474,12 +450,60 @@ function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, se
 }
 
 // ============================================
+// GỬI LẠI MÃ OTP — dùng chung cho OTP số điện thoại và email
+// ============================================
+const RESEND_COOLDOWN_SEC = 60;
+
+/**
+ * Nút "Gửi lại mã" có đếm ngược: mã vừa gửi xong thì phải chờ RESEND_COOLDOWN_SEC giây mới gửi lại được
+ * (tránh spam SMS/email và bị Firebase chặn too-many-requests). onResend() trả true nếu gửi thành công.
+ */
+function ResendCode({ onResend }) {
+  const [left, setLeft] = useState(RESEND_COOLDOWN_SEC);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (left <= 0) return undefined;
+    const t = setTimeout(() => setLeft(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [left]);
+
+  const resend = async () => {
+    setSending(true);
+    const ok = await onResend();
+    setSending(false);
+    if (ok) setLeft(RESEND_COOLDOWN_SEC);
+  };
+
+  return (
+    <Btn variant="secondary" onClick={resend} loading={sending} disabled={left > 0} style={{ marginTop: 12 }}>
+      <RefreshCw size={18} /> {left > 0 ? `Gửi lại mã sau ${left}s` : 'Gửi lại mã'}
+    </Btn>
+  );
+}
+
+// ============================================
 // PHONE OTP (Firebase verification)
 // ============================================
 function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken, setUserName }) {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  const [info, setInfo] = useState('');
+
+  const handleResend = async () => {
+    setMsg(''); setInfo('');
+    try {
+      window.confirmationResult = await sendPhoneOtp(toE164Vn(phone));
+      setOtp('');
+      setInfo('Đã gửi mã OTP mới. Mã cũ không còn dùng được.');
+      return true;
+    } catch (err) {
+      console.error('Firebase phone OTP resend error:', err);
+      setMsg(phoneAuthMessage(err));
+      return false;
+    }
+  };
 
   const handleVerify = async () => {
     if (otp.length !== 6) { setMsg('Vui lòng nhập đủ 6 số OTP'); return; }
@@ -508,13 +532,8 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
       }
     } catch (err) {
       console.error('Phone OTP verify error:', err);
-      if (err.code === 'auth/invalid-verification-code') {
-        setMsg('Mã OTP không đúng. Vui lòng thử lại.');
-      } else if (err.code === 'auth/code-expired') {
-        setMsg('Mã OTP đã hết hạn. Vui lòng quay lại và gửi lại.');
-      } else {
-        setMsg(err.message || 'Lỗi xác thực');
-      }
+      setInfo('');
+      setMsg(phoneAuthMessage(err));
     }
     setLoading(false);
   };
@@ -533,7 +552,9 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
           onKeyDown={e => e.key === 'Enter' && handleVerify()} />
       </div>
       <Btn onClick={handleVerify} loading={loading}><CheckCircle size={18} /> Xác nhận</Btn>
+      <ResendCode onResend={handleResend} />
       {msg && <Msg type="error" text={msg} />}
+      {info && !msg && <Msg type="success" text={info} />}
     </div>
   );
 }
@@ -545,10 +566,25 @@ function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setU
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  const [info, setInfo] = useState('');
+
+  const handleResend = async () => {
+    setMsg(''); setInfo('');
+    try {
+      const res = await api.sendOtp(email);
+      if (res.success) {
+        setOtp('');
+        setInfo('Đã gửi mã OTP mới vào email. Mã cũ không còn dùng được.');
+        return true;
+      }
+      setMsg(res.message || 'Lỗi gửi lại OTP');
+    } catch { setMsg('Lỗi kết nối server'); }
+    return false;
+  };
 
   const handleVerify = async () => {
     if (otp.length !== 6) { setMsg('Vui lòng nhập đủ 6 số OTP'); return; }
-    setLoading(true); setMsg('');
+    setLoading(true); setMsg(''); setInfo('');
     try {
       const res = await api.verifyOtp(email, otp);
       if (res.success && res.data) {
@@ -582,7 +618,9 @@ function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setU
           onKeyDown={e => e.key === 'Enter' && handleVerify()} />
       </div>
       <Btn onClick={handleVerify} loading={loading}><CheckCircle size={18} /> Xác nhận</Btn>
+      <ResendCode onResend={handleResend} />
       {msg && <Msg type="error" text={msg} />}
+      {info && !msg && <Msg type="success" text={info} />}
     </div>
   );
 }
