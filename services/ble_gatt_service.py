@@ -6,6 +6,10 @@ App xin backend một mã mở ô (ký Ed25519, sống 2 phút), kết nối BLE
 
 GATT server cũng phát quảng bá cùng tên `LOCKR_<mã tủ>` như `BleAdvertiserService`, nên khi chạy
 được thì không cần bật quảng bá kiểu cũ (main.py). Hợp đồng: docs/01-overview/ble-open-contract.md.
+
+Mỗi lần mở (và mỗi mã bị từ chối nhưng giải được) Pi ghi nhật ký điều khiển `BOX_OPEN_BLE` /
+`BLE_REJECTED` kèm `nonce`, `userId`, `boxNumber` — backend dựa vào `nonce` để biết mã cấp cho đơn nào
+đã mở được ô rồi chuyển trạng thái đơn (mã theo đơn, F3-G11).
 """
 import asyncio
 import json
@@ -31,12 +35,15 @@ KEY_RETRY_S = 60
 
 class BleGattService:
     def __init__(self, cabinet_state, hardware, key_store: PublicKeyStore,
-                 name_fn: Callable[[], str], control_log=None):
+                 name_fn: Callable[[], str], control_log=None,
+                 require_door_sensor: Optional[Callable[[], bool]] = None):
         self.cabinet_state = cabinet_state
         self.hardware = hardware
         self.key_store = key_store
         self._name_fn = name_fn
         self.control_log = control_log
+        # Như lệnh mở từ xa (`REQUIRE_DOOR_SENSOR`): bật thì relay chạy mà cảm biến vẫn thấy cửa đóng ⇒ JAMMED.
+        self._require_door_sensor = require_door_sensor or (lambda: False)
         self.replay = ReplayGuard()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._server = None
@@ -51,18 +58,20 @@ class BleGattService:
 
     def handle_token(self, data: bytes) -> dict:
         """Kiểm mã rồi kích relay. Trả JSON gửi lại app: nonce, result OK/FAIL, box, error."""
-        nonce = None
+        decoded = None
         try:
-            nonce = ble_open_token.decode(bytes(data)).nonce
+            decoded = ble_open_token.decode(bytes(data))
         except TokenError:
             pass
+        nonce = decoded.nonce if decoded else None
         try:
             token = ble_open_token.verify(data, self.key_store.key, self.cabinet_state.primary_locker_id,
                                           self.replay)
         except TokenError as e:
             logger.warning(f"BLE open rejected: {e.code} — {e.message}")
-            if nonce is not None and e.code not in ("BAD_FORMAT", "BAD_VERSION"):
-                self._log("BLE_REJECTED", "FAILED", None, f"Từ chối mã mở ô qua Bluetooth: {e.code}")
+            if decoded is not None and e.code not in ("BAD_FORMAT", "BAD_VERSION"):
+                self._log("BLE_REJECTED", "FAILED", None, f"Từ chối mã mở ô qua Bluetooth: {e.code}",
+                          decoded, e.code)
             return {"nonce": nonce, "result": "FAIL", "error": e.code}
 
         slot = token.box_number - 1
@@ -74,15 +83,27 @@ class BleGattService:
                 result = {"result": "FAIL", "error": "HARDWARE_ERROR"}
         ok = result.get("result") == "OK"
         error = None if ok else str(result.get("error") or "OPEN_FAILED")
+        # `door`: True = cửa đóng. Không có trường này (phần cứng không đọc cảm biến) ⇒ không kết luận kẹt.
+        if ok and result.get("door") is True and self._door_sensor_required():
+            ok, error = False, "JAMMED"
         message = f"Mở ô {token.box_number} qua Bluetooth (tài khoản #{token.user_id})"
-        if not ok:
+        if error == "JAMMED":
+            message += " — relay chạy nhưng cảm biến vẫn thấy cửa đóng (JAMMED)"
+        elif not ok:
             message += f" — lỗi {error}"
-        self._log("BOX_OPEN_BLE", "OK" if ok else "FAILED", slot, message)
+        self._log("BOX_OPEN_BLE", "OK" if ok else "FAILED", slot, message, token, error)
         logger.warning(message + (" → OK" if ok else ""))
         reply = {"nonce": token.nonce, "result": "OK" if ok else "FAIL", "box": token.box_number}
         if error:
             reply["error"] = error
         return reply
+
+    def _door_sensor_required(self) -> bool:
+        try:
+            return bool(self._require_door_sensor())
+        except Exception as e:
+            logger.error(f"REQUIRE_DOOR_SENSOR lookup failed: {e}")
+            return False
 
     def _open(self, slot: int) -> dict:
         ble_open = getattr(self.hardware, "ble_open_slot", None)
@@ -91,10 +112,16 @@ class BleGattService:
         cabinet = self.cabinet_state.get_cabinet_by_id(str(self.cabinet_state.primary_locker_id)) or {}
         return self.hardware.open_slot(slot, slave_id=int(cabinet.get("slaveId") or 1))
 
-    def _log(self, action: str, status: str, slot: Optional[int], message: str):
+    def _log(self, action: str, status: str, slot: Optional[int], message: str,
+             token: Optional[ble_open_token.OpenToken] = None, error_code: Optional[str] = None):
         if self.control_log:
             try:
-                self.control_log.record(action, status, slot_index=slot, message=message)
+                self.control_log.record(
+                    action, status, slot_index=slot, message=message,
+                    nonce=token.nonce if token else None,
+                    user_id=token.user_id if token else None,
+                    box_number=token.box_number if token else None,
+                    error_code=error_code)
             except Exception as e:
                 logger.error(f"Control log {action} failed: {e}")
 

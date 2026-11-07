@@ -46,11 +46,13 @@ class _SimCabinetState:
 
 
 class _SimHardware:
-    """Relay giả: in ô được mở, có thể ép lỗi từng ô để thử nhánh HARDWARE_ERROR."""
+    """Relay giả: in ô được mở, có thể ép lỗi từng ô để thử nhánh HARDWARE_ERROR, hoặc giả cửa kẹt
+    (relay chạy nhưng cảm biến vẫn báo cửa đóng ⇒ JAMMED) để thử màn dự phòng của app."""
 
-    def __init__(self, boxes: int, fail_boxes):
+    def __init__(self, boxes: int, fail_boxes, jam_boxes=()):
         self.boxes = boxes
         self.fail_boxes = set(fail_boxes)
+        self.jam_boxes = set(jam_boxes)
 
     def ble_open_slot(self, slot: int) -> dict:
         box = slot + 1
@@ -59,7 +61,9 @@ class _SimHardware:
         if box in self.fail_boxes:
             return {"result": "FAIL", "error": "HARDWARE_ERROR"}
         print(f"\n  >>> [RELAY GIẢ] MỞ Ô {box}  ({time.strftime('%H:%M:%S')})\n", flush=True)
-        return {"result": "OK"}
+        if box in self.jam_boxes:
+            return {"result": "OK", "door": True}  # cảm biến giả: cửa vẫn đóng
+        return {"result": "OK", "door": False}
 
 
 class SimBleGattService(BleGattService):
@@ -131,6 +135,8 @@ def main() -> int:
     parser.add_argument("--boxes", type=int, default=24, help="số ô có relay (ô lớn hơn ⇒ INVALID_SLOT)")
     parser.add_argument("--fail-box", type=int, action="append", default=[],
                         help="ô giả lỗi phần cứng (lặp lại được)")
+    parser.add_argument("--jam-box", type=int, action="append", default=[],
+                        help="ô giả kẹt cửa ⇒ JAMMED (lặp lại được)")
     parser.add_argument("--backend", default=os.getenv("BACKEND_API_URL") or DEFAULT_BACKEND)
     parser.add_argument("--public-key", default=os.getenv("BLE_PUBLIC_KEY", ""),
                         help="khoá công khai base64, bỏ qua tải từ backend")
@@ -144,8 +150,8 @@ def main() -> int:
 
     name = f"LOCKR_{args.locker_code}"
     service = SimBleGattService(
-        _SimCabinetState(args.locker_id), _SimHardware(args.boxes, args.fail_box), store,
-        name_fn=lambda: name, any_locker=args.locker_id is None)
+        _SimCabinetState(args.locker_id), _SimHardware(args.boxes, args.fail_box, args.jam_box), store,
+        name_fn=lambda: name, any_locker=args.locker_id is None, require_door_sensor=lambda: True)
 
     print("=" * 66)
     print("  LOCK.R — TỦ GIẢ MỞ Ô QUA BLUETOOTH")

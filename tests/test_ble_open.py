@@ -126,13 +126,20 @@ class TestBleGattHandle(unittest.TestCase):
         self.hardware.ble_open_slot.assert_called_once_with(2)
         action, status = self.log.record.call_args.args
         self.assertEqual(("BOX_OPEN_BLE", "OK"), (action, status))
-        self.assertIn("#1234", self.log.record.call_args.kwargs["message"])
+        kwargs = self.log.record.call_args.kwargs
+        self.assertIn("#1234", kwargs["message"])
+        # Backend khớp nonce với mã đã cấp cho đơn ⇒ chuyển trạng thái đơn (F3-G11 mở theo đơn).
+        self.assertEqual(("ab" * 8, 1234, 3, 2, None),
+                         (kwargs["nonce"], kwargs["user_id"], kwargs["box_number"], kwargs["slot_index"],
+                          kwargs["error_code"]))
 
     def test_hardware_failure_is_reported(self):
         self.hardware.ble_open_slot.return_value = {"result": "FAIL", "error": "INVALID_SLOT"}
         reply = self.service.handle_token(make_token(self.key, box=8))
         self.assertEqual("FAIL", reply["result"])
         self.assertEqual("INVALID_SLOT", reply["error"])
+        self.assertEqual("FAILED", self.log.record.call_args.args[1])
+        self.assertEqual("INVALID_SLOT", self.log.record.call_args.kwargs["error_code"])
 
     def test_rejected_token_does_not_touch_relay(self):
         reply = self.service.handle_token(make_token(Ed25519PrivateKey.generate()))
@@ -140,6 +147,40 @@ class TestBleGattHandle(unittest.TestCase):
         self.assertEqual("01" * 8, reply["nonce"])
         self.hardware.ble_open_slot.assert_not_called()
         self.assertEqual("BLE_REJECTED", self.log.record.call_args.args[0])
+        kwargs = self.log.record.call_args.kwargs
+        self.assertEqual(("01" * 8, 1234, 3, "BAD_SIGNATURE", None),
+                         (kwargs["nonce"], kwargs["user_id"], kwargs["box_number"], kwargs["error_code"],
+                          kwargs["slot_index"]))
+
+    def test_door_still_closed_is_jammed_when_sensor_required(self):
+        self.hardware.ble_open_slot.return_value = {"result": "OK", "slot": 2, "door": True}
+        reply = self.door_service(True).handle_token(make_token(self.key, box=3, nonce=b"\xcd" * 8))
+        self.assertEqual({"nonce": "cd" * 8, "result": "FAIL", "box": 3, "error": "JAMMED"}, reply)
+        action, status = self.log.record.call_args.args
+        self.assertEqual(("BOX_OPEN_BLE", "FAILED"), (action, status))
+        kwargs = self.log.record.call_args.kwargs
+        self.assertEqual(("JAMMED", "cd" * 8, 1234, 3),
+                         (kwargs["error_code"], kwargs["nonce"], kwargs["user_id"], kwargs["box_number"]))
+
+    def test_door_check_is_off_without_sensor_requirement_or_reading(self):
+        cases = [(False, {"result": "OK", "door": True}),     # REQUIRE_DOOR_SENSOR tắt
+                 (True, {"result": "OK", "door": False}),     # cửa đã mở
+                 (True, {"result": "OK"})]                    # phần cứng không báo cảm biến
+        for i, (required, result) in enumerate(cases):
+            with self.subTest(required=required, result=result):
+                self.hardware.ble_open_slot.return_value = result
+                reply = self.door_service(required).handle_token(make_token(self.key, nonce=bytes([i]) * 8))
+                self.assertEqual("OK", reply["result"])
+                self.assertNotIn("error", reply)
+                self.assertEqual("OK", self.log.record.call_args.args[1])
+
+    def test_default_service_has_no_door_check(self):
+        self.hardware.ble_open_slot.return_value = {"result": "OK", "door": True}
+        self.assertEqual("OK", self.service.handle_token(make_token(self.key))["result"])
+
+    def door_service(self, required):
+        return BleGattService(self.state, self.hardware, self.service.key_store, name_fn=lambda: "x",
+                              control_log=self.log, require_door_sensor=lambda: required)
 
     def test_garbage_is_rejected_without_log(self):
         reply = self.service.handle_token(b"hello")
@@ -168,10 +209,10 @@ class TestSimulatedCabinet(unittest.TestCase):
         self.key = Ed25519PrivateKey.generate()
         self.store = PublicKeyStore("", "", env_key=raw_public(self.key))
 
-    def service(self, locker_id, boxes=24, fail=()):
+    def service(self, locker_id, boxes=24, fail=(), jam=()):
         return self.sim.SimBleGattService(
-            self.sim._SimCabinetState(locker_id), self.sim._SimHardware(boxes, fail), self.store,
-            name_fn=lambda: "LOCKR_SIM", any_locker=locker_id is None)
+            self.sim._SimCabinetState(locker_id), self.sim._SimHardware(boxes, fail, jam), self.store,
+            name_fn=lambda: "LOCKR_SIM", any_locker=locker_id is None, require_door_sensor=lambda: True)
 
     def test_any_locker_accepts_signed_token_of_each_locker(self):
         service = self.service(None)
@@ -193,6 +234,11 @@ class TestSimulatedCabinet(unittest.TestCase):
         service = self.service(None, boxes=4, fail=[2])
         self.assertEqual("INVALID_SLOT", service.handle_token(make_token(self.key, box=5, nonce=b"\x03" * 8))["error"])
         self.assertEqual("HARDWARE_ERROR", service.handle_token(make_token(self.key, box=2, nonce=b"\x04" * 8))["error"])
+
+    def test_jammed_box(self):
+        service = self.service(None, jam=[3])
+        self.assertEqual("JAMMED", service.handle_token(make_token(self.key, box=3, nonce=b"\x05" * 8))["error"])
+        self.assertEqual("OK", service.handle_token(make_token(self.key, box=4, nonce=b"\x06" * 8))["result"])
 
 
 # Sinh 2026-10-24 bằng BleTokenSigner thật (tủ 7, ô 3, tài khoản 1234).

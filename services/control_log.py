@@ -74,7 +74,11 @@ class ControlLog:
 
     def record(self, action: str, status: str, *, axis: Optional[int] = None,
                slot_index: Optional[int] = None, revolutions: Optional[float] = None,
-               message: Optional[str] = None) -> Optional[dict]:
+               message: Optional[str] = None, nonce: Optional[str] = None,
+               user_id: Optional[int] = None, box_number: Optional[int] = None,
+               error_code: Optional[str] = None) -> Optional[dict]:
+        """Ghi một sự kiện. `nonce`/`userId`/`boxNumber`/`errorCode` chỉ có ở sự kiện mở ô qua Bluetooth
+        (`BOX_OPEN_BLE`, `BLE_REJECTED`) — backend khớp `nonce` với mã đã cấp cho đơn."""
         locker_id = self._locker_id()
         if not locker_id:
             logger.debug(f"Control log {action} skipped: Pi chưa gán vào tủ nào")
@@ -95,6 +99,10 @@ class ControlLog:
             "boxId": box_id,
             "revolutions": revolutions,
             "message": message,
+            "nonce": nonce,
+            "userId": user_id,
+            "boxNumber": box_number,
+            "errorCode": error_code,
             "occurredAt": datetime.now(timezone.utc).isoformat(),
         }
         event = {k: v for k, v in event.items() if v is not None}
