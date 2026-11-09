@@ -1388,3 +1388,30 @@ html, body, #root {
 .box-legend .lg.rented { background: #f59e0b; }
 .box-legend .lg.drone { background: #6366f1; }
 .box-legend .lg.offline { background: #ef4444; }
+
+/* ─── Màn gán bộ điều khiển (Pi chưa phục vụ tủ nào, F3-G12) ─── */
+.setup-card {
+  position: relative; z-index: 1;
+  width: min(880px, 92%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 28px 32px;
+  display: flex; flex-direction: column; gap: 24px;
+}
+.setup-head { display: flex; gap: 16px; align-items: flex-start; color: var(--accent); }
+.setup-head h1 { margin: 0; font-size: 24px; color: var(--text-primary); }
+.setup-head p { margin: 6px 0 0; color: var(--text-secondary); font-size: 15px; line-height: 1.5; }
+.setup-body { display: flex; gap: 32px; align-items: center; flex-wrap: wrap; }
+.setup-qr { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.setup-qr svg { background: #fff; border-radius: var(--radius-sm); border: 1px solid var(--border); padding: 8px; }
+.setup-qr-empty {
+  width: 240px; height: 240px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border); border-radius: var(--radius-sm); color: var(--text-muted);
+}
+.setup-mac { font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 20px; font-weight: 700; letter-spacing: 1px; color: var(--text-primary); }
+.setup-steps { flex: 1; min-width: 260px; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+.setup-steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; line-height: 1.5; color: var(--text-secondary); }
+.setup-steps li svg { flex-shrink: 0; margin-top: 3px; color: var(--accent); }
+.setup-foot { display: flex; gap: 18px; font-size: 13px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 14px; }
