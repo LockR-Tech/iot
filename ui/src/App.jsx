@@ -1,10 +1,47 @@
 import { useState, useEffect } from 'react';
 import { Monitor } from 'lucide-react';
 import KioskScreen from './screens/KioskScreen';
+import SetupScreen from './screens/SetupScreen';
 import VirtualKeyboard from './components/VirtualKeyboard';
+import * as api from './api';
+
+const SETUP_POLL_MS = 5000;
+
+/**
+ * Pi chưa phục vụ tủ nào ⇒ hiện mã QR gán bộ điều khiển (F3-G12). `null` = chưa biết (không đọc được API
+ * cục bộ, vd chạy kiosk trên máy dev) ⇒ giữ màn khách như trước.
+ */
+function usePairingState() {
+  const [configured, setConfigured] = useState(null);
+  const [info, setInfo] = useState(null);
+
+  useEffect(() => {
+    let ignore = false;
+    const poll = async () => {
+      try {
+        const state = await api.getSystemState();
+        if (ignore || typeof state?.isConfigured !== 'boolean') return;
+        setConfigured(state.isConfigured);
+        if (!state.isConfigured) {
+          const system = await api.getSystemInfo();
+          if (!ignore) setInfo(system);
+        }
+      } catch { /* API cục bộ chưa sẵn sàng — thử lại lần sau */ }
+    };
+    poll();
+    const timer = setInterval(poll, SETUP_POLL_MS);
+    return () => {
+      ignore = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  return { configured, info };
+}
 
 export default function App() {
   const [time, setTime] = useState(new Date());
+  const { configured, info } = usePairingState();
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -34,7 +71,7 @@ export default function App() {
       <div className="layout">
         {/* ─── Main View ─── */}
         <div className="main-content">
-          <KioskScreen />
+          {configured === false ? <SetupScreen info={info} /> : <KioskScreen />}
         </div>
       </div>
 
