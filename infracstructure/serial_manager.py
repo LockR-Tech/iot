@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import threading
 from typing import Optional, Callable
@@ -19,6 +20,14 @@ except ImportError:
 # xem docs/03-hardware/cabinet-wiring-spec.md § 5. Đổi số này phải đổi kèm LOCK_PINS /
 # MAGNETIC_PINS trong arduino/locker_controller/locker_controller.ino.
 MAX_SLOTS = 7
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 class SerialManager:
@@ -42,6 +51,11 @@ class SerialManager:
         self.port = port
         self.baud_rate = baud_rate
         self.simulation = simulation
+        # Giả lập: số ô khai báo với backend (SIM_SLOTS, mặc định 7 như firmware) để thử tủ khác số ô.
+        # Chỉ gắn `num_slots` khi giả lập: setup_handler đọc nó, còn RS485 thật giữ mặc định MAX_SLOTS như cũ.
+        self._sim_slots = _env_positive_int("SIM_SLOTS", MAX_SLOTS) if simulation else MAX_SLOTS
+        if simulation:
+            self.num_slots = self._sim_slots
         if not SERIAL_AVAILABLE and not self.simulation:
             raise ImportError("pyserial is not installed, cannot connect to real hardware.")
         self._ser: Optional[object] = None
@@ -296,7 +310,7 @@ class SerialManager:
         """
         if self.simulation:
             return [
-                {"slaveId": 1, "availableSlots": MAX_SLOTS}
+                {"slaveId": 1, "availableSlots": self._sim_slots}
             ]
         
         found = []

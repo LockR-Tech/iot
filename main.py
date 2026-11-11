@@ -11,7 +11,7 @@ from hardware.rpi_locker import HardwareController
 from infracstructure.database import DatabaseManager
 from services.locker_service import LockerService
 from services.heartbeat_service import HeartbeatService
-from services.discovery_service import DiscoveryService
+from services.discovery_service import DiscoveryService, UnconfiguredAnnouncer
 from services.ble_service import BleAdvertiserService
 from services.ble_gatt_service import BleGattService
 from services.ble_open_token import PublicKeyStore
@@ -25,6 +25,8 @@ _running = True
 _exit_code = 0
 # Lệnh restart: dừng êm không xong trong chừng này giây (luồng nào đó treo) thì ép thoát.
 RESTART_FORCE_EXIT_SECONDS = 20
+# Pi chưa gán tủ báo discovery lại sau chừng này giây — phải nhỏ hơn cửa sổ online 150 s của iot-service.
+UNCONFIGURED_DISCOVERY_INTERVAL_S = 60
 
 
 def _signal_handler(sig, frame):
@@ -195,10 +197,14 @@ def main():
 
     logger.warning("✅ System is READY (Logged at WARNING level)")
 
-    # Giữ chương trình chạy
+    # Pi chưa gán tủ thì không có heartbeat: báo lại discovery định kỳ để backend vẫn thấy Pi online
+    # (cửa sổ 150 s) — KTV mới quét QR / chọn được Pi trong danh sách khi lắp đặt tủ (F3-G12).
+    announcer = UnconfiguredAnnouncer(UNCONFIGURED_DISCOVERY_INTERVAL_S)
     try:
         while _running:
             time.sleep(1)
+            if announcer.tick(cabinet_state.is_configured, mqtt_wrapper.is_connected):
+                threading.Thread(target=discovery_service.discover_and_report, daemon=True).start()
     except KeyboardInterrupt:
         pass
     finally:
