@@ -6,6 +6,28 @@ from utils.logger import get_logger
 
 logger = get_logger("DiscoveryService")
 
+class UnconfiguredAnnouncer:
+    """
+    Pi chưa gán tủ không có heartbeat, nên backend chỉ thấy nó online trong ~150 s sau lần discovery lúc nối
+    broker; quá thời gian đó KTV không quét QR / chọn được Pi khi lắp đặt tủ (F3-G12). Gọi `tick()` mỗi giây:
+    trả True khi tới lúc báo discovery lại. Chu kỳ phải nhỏ hơn cửa sổ online của iot-service.
+    """
+
+    def __init__(self, interval_s: int = 60):
+        self.interval_s = interval_s
+        self._elapsed = 0
+
+    def tick(self, configured: bool, connected: bool) -> bool:
+        if configured:
+            self._elapsed = 0
+            return False
+        self._elapsed += 1
+        if self._elapsed >= self.interval_s and connected:
+            self._elapsed = 0
+            return True
+        return False
+
+
 class DiscoveryService:
     """
     Pi tự báo mình cho backend: MAC, phần cứng, số ô, tủ đang phục vụ.
