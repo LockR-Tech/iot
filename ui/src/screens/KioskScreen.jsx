@@ -6,7 +6,7 @@ import {
   CheckCircle, KeyRound, Hash, User, CreditCard,
   Unlock, Home, Loader2, Circle, ClipboardList,
   Wifi, ChevronRight, ShieldCheck, X,
-  Clock, LogOut, Users, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical,
+  Clock, LogOut, AlertTriangle, Plane, Luggage, QrCode, RefreshCw, FlaskConical,
   CalendarDays, Minus, Plus, Info, XCircle, Wrench, Send
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -19,6 +19,8 @@ import lockrLogo from '../assets/logo.png';
 // Icon "Báo sự cố" 3D của app mobile (AppLottieAssets.baoSuCo).
 import baoSuCo3dAnimation from '../assets/illustrations/bao_su_co_3d.json';
 import LottieAnimation from '../components/LottieAnimation';
+import { useT, tStatic, setLang, formatMoney } from '../i18n/LangContext.jsx';
+import { translate } from '../i18n/core.js';
 
 
 // ============================================
@@ -136,6 +138,13 @@ export default function KioskScreen() {
     if (cdRef.current) clearInterval(cdRef.current);
   }, []);
 
+  // Khách xong lượt (màn thành công tự về / bấm "Về màn hình chính") ⇒ khách sau bắt đầu bằng tiếng Việt.
+  // Nút "Quay lại" giữa chừng (goHome) giữ ngôn ngữ đang chọn.
+  const finishSession = useCallback(() => {
+    setLang('vi');
+    goHome();
+  }, [goHome]);
+
   const showSuccess = useCallback((title, msg, extra = null) => {
     setSuccessTitle(title);
     setSuccessMsg(msg);
@@ -148,9 +157,9 @@ export default function KioskScreen() {
     cdRef.current = setInterval(() => {
       sec--;
       setCountdown(sec);
-      if (sec <= 0) { clearInterval(cdRef.current); goHome(); }
+      if (sec <= 0) { clearInterval(cdRef.current); finishSession(); }
     }, 1000);
-  }, [go, goHome]);
+  }, [go, finishSession]);
 
   return (
     <div className="kiosk-wrap">
@@ -164,7 +173,7 @@ export default function KioskScreen() {
       {screen === 'order-info' && <OrderInfoScreen go={go} back={back} jwt={jwt} selectedBox={selectedBox} setOrderId={setOrderId} setOrderPin={setOrderPin} setOrderCode={setOrderCode} setTotalPrice={setTotalPrice} activeLockerId={activeLockerId} />}
       {screen === 'payment' && <PaymentScreen go={go} goHome={goHome} jwt={jwt} orderId={orderId} orderPin={orderPin} orderCode={orderCode} totalPrice={totalPrice} selectedBox={selectedBox} showSuccess={showSuccess} activeLockerId={activeLockerId} pinContact={loginMethod === 'email' ? { method: 'email', value: email } : { method: 'phone', value: phone }} />}
       {screen === 'staff' && <StaffScreen goHome={goHome} showSuccess={showSuccess} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
-      {screen === 'success' && <SuccessScreen goHome={goHome} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
+      {screen === 'success' && <SuccessScreen goHome={finishSession} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
       <DialogHost />
     </div>
   );
@@ -198,14 +207,15 @@ const notify = (message, opts = {}) => openDialog({ message, ...opts });
 const ask = (message, opts = {}) => openDialog({ message, confirm: true, ...opts });
 
 const DIALOG_TONES = {
-  info: { Icon: Info, title: 'Thông báo' },
-  success: { Icon: CheckCircle, title: 'Thành công' },
-  warn: { Icon: AlertTriangle, title: 'Lưu ý' },
-  error: { Icon: XCircle, title: 'Có lỗi xảy ra' },
+  info: { Icon: Info, titleKey: 'dialog.info' },
+  success: { Icon: CheckCircle, titleKey: 'dialog.success' },
+  warn: { Icon: AlertTriangle, titleKey: 'dialog.warn' },
+  error: { Icon: XCircle, titleKey: 'dialog.error' },
 };
 
 function DialogHost() {
   const [dialog, setDialog] = useState(null);
+  const { t } = useT();
   useEffect(() => {
     dialogListener = setDialog;
     return () => { dialogListener = null; };
@@ -218,14 +228,14 @@ function DialogHost() {
     <div className="modal-overlay kiosk-dialog-overlay" onClick={() => close(false)}>
       <div className={`kiosk-dialog tone-${tone}`} role="alertdialog" aria-modal="true" onClick={e => e.stopPropagation()}>
         <div className="kiosk-dialog-icon"><Icon size={30} /></div>
-        <h3>{dialog.title || DIALOG_TONES[tone].title}</h3>
+        <h3>{dialog.title || t(DIALOG_TONES[tone].titleKey)}</h3>
         <p>{dialog.message}</p>
         <div className="kiosk-dialog-actions">
           {dialog.confirm && (
-            <button className="btn btn-secondary" onClick={() => close(false)}>{dialog.cancelText || 'Huỷ'}</button>
+            <button className="btn btn-secondary" onClick={() => close(false)}>{dialog.cancelText || t('dialog.cancel')}</button>
           )}
           <button className="btn btn-primary" autoFocus onClick={() => close(true)}>
-            {dialog.confirmText || (dialog.confirm ? 'Đồng ý' : 'Đã hiểu')}
+            {dialog.confirmText || (dialog.confirm ? t('dialog.agree') : t('dialog.understood'))}
           </button>
         </div>
       </div>
@@ -237,19 +247,23 @@ function DialogHost() {
 // thuê lúc đơn được thanh toán (OrderService#notifyRenterOrderPaid). Thuê bằng SĐT: không có thư nên
 // nhắc khách ghi lại mã, mã vẫn xem lại được trong app.
 function PinNotice({ pin, contact, compact = false }) {
+  const { t } = useT();
   if (!pin) return null;
   const byEmail = contact?.method === 'email' && contact.value;
   return (
     <div className={`pin-notice ${compact ? 'compact' : ''}`}>
-      <div className="pin-notice-label"><KeyRound size={14} /> Mã mở ô tủ của bạn</div>
+      <div className="pin-notice-label"><KeyRound size={14} /> {t('pin.label')}</div>
       <div className="pin-notice-code">{pin}</div>
       <div className={`pin-notice-badge ${byEmail ? 'email' : 'phone'}`}>
         {byEmail ? <Mail size={18} /> : <AlertTriangle size={18} />}
         <span>
           {byEmail ? (
-            <>Mã mở ô và toàn bộ thông tin thuê đã được gửi về email <strong>{contact.value}</strong>. Nếu chưa thấy, hãy kiểm tra cả mục Spam.</>
+            <>{t('pin.email', { email: <strong>{contact.value}</strong> })}</>
           ) : (
-            <><strong>Lưu ý: nhớ mã này để mở lại ô tủ.</strong> Hãy ghi lại hoặc chụp màn hình — mã dùng để mở ô suốt thời gian thuê. Bạn cũng xem lại mã trong mục Đơn tủ của app Lock.R{contact?.value ? <> (đăng nhập bằng số <strong>{contact.value}</strong>)</> : null}.</>
+            <>{t(contact?.value ? 'pin.phoneWithAccount' : 'pin.phone', {
+              note: <strong>{t('pin.phoneNote')}</strong>,
+              phone: <strong>{contact?.value}</strong>,
+            })}</>
           )}
         </span>
       </div>
@@ -258,9 +272,10 @@ function PinNotice({ pin, contact, compact = false }) {
 }
 
 function Btn({ children, onClick, loading, disabled, variant = 'primary', style, id }) {
+  const { t } = useT();
   return (
     <button id={id} className={`btn btn-${variant}`} onClick={onClick} disabled={loading || disabled} style={style}>
-      {loading ? <><Loader2 size={18} className="spinner" style={{ border: 'none', animation: 'spin 0.6s linear infinite' }} /> Đang xử lý...</> : children}
+      {loading ? <><Loader2 size={18} className="spinner" style={{ border: 'none', animation: 'spin 0.6s linear infinite' }} /> {t('common.processing')}</> : children}
     </button>
   );
 }
@@ -268,13 +283,17 @@ function Btn({ children, onClick, loading, disabled, variant = 'primary', style,
 // ============================================
 // HOME
 // ============================================
+// Chọn ngôn ngữ — chỉ ở màn chính: vài màn lưu sẵn câu đã dịch trong state nên không đổi giữa chừng.
+const LANG_OPTIONS = [['vi', 'VI'], ['en', 'EN']];
+
 function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLockerId, allLockers }) {
+  const { t, lang, setLang: chooseLang } = useT();
   return (
     <div className="screen screen-home-split">
       <div className="home-left">
         <div className="kiosk-hero-3d">
           <div className="hero-brand-badge">
-            <span className="dot green"></span> Hệ thống thông minh 24/7
+            <span className="dot green"></span> {t('home.badge')}
           </div>
           <div className="hero-3d-visual">
             <img src={lockrLogo} alt="Lock.R" className="hero-logo-img" />
@@ -284,7 +303,7 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
               Lock.R
             </h1>
             <p style={{ fontSize: 14, color: 'var(--text-secondary)', margin: 0, fontWeight: 500, maxWidth: 300, lineHeight: 1.5 }}>
-              Hệ thống tủ thông minh tự động — Giao nhận bưu kiện &amp; lưu trữ đồ đạc tiện lợi
+              {t('home.tagline')}
             </p>
           </div>
         </div>
@@ -292,11 +311,11 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
 
         {/* Báo ô tủ hư: nút tròn 3D như nút "Báo sự cố" trên app (không chiếm chỗ của 2 thẻ chính).
             Cần đăng nhập vì backend ghi người báo (REPORTER_REQUIRED). */}
-        <button className="home-report-fab" onClick={() => startLogin('report')} aria-label="Báo ô tủ hư">
+        <button className="home-report-fab" onClick={() => startLogin('report')} aria-label={t('report.title')}>
           <span className="home-report-fab-circle">
             <LottieAnimation animationData={baoSuCo3dAnimation} className="home-report-fab-lottie" />
           </span>
-          <span className="home-report-fab-label">Báo sự cố</span>
+          <span className="home-report-fab-label">{t('home.report')}</span>
         </button>
       </div>
 
@@ -326,8 +345,8 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
             <div className="locker-address">{lockerInfo.address}</div>
             {lockerInfo.totalBoxes != null && (
               <div className="locker-stats">
-                <span className="stat-available"><CheckCircle size={14} style={{ marginRight: 4, verticalAlign: -2 }} />{lockerInfo.availableBoxes ?? '—'} Trống</span>
-                <span className="stat-total">/ {lockerInfo.totalBoxes} ô</span>
+                <span className="stat-available"><CheckCircle size={14} style={{ marginRight: 4, verticalAlign: -2 }} />{t('home.free', { n: lockerInfo.availableBoxes ?? '—' })}</span>
+                <span className="stat-total">{t('home.total', { n: lockerInfo.totalBoxes })}</span>
               </div>
             )}
           </div>
@@ -335,7 +354,7 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
 
         <div className="home-status">
           <Wifi size={16} />
-          Kiosk sẵn sàng phục vụ
+          {t('home.ready')}
         </div>
 
         <div className="kiosk-action-cards">
@@ -346,13 +365,13 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
             </div>
             <div className="card-3d-body">
               <div className="card-3d-title">
-                Mở Tủ / Nhận Đồ <ChevronRight size={18} color="var(--accent)" />
+                {t('home.open.title')} <ChevronRight size={18} color="var(--accent)" />
               </div>
               <div className="card-3d-subtitle">
-                Nhập mã OTP nhận hàng hoặc Quét mã QR bưu kiện
+                {t('home.open.subtitle')}
               </div>
               <div className="card-3d-badge blue">
-                <KeyRound size={12} /> Mã PIN / Quét QR
+                <KeyRound size={12} /> {t('home.open.badge')}
               </div>
             </div>
           </div>
@@ -360,22 +379,31 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
           {/* Card 2: Gửi đồ / Thuê tủ */}
           <div className="card-3d-action secondary" onClick={() => startLogin('boxes')}>
             <div className="card-3d-thumb">
-              <img src={boxStack3d} alt="Gửi đồ" />
+              <img src={boxStack3d} alt={t('home.rent.alt')} />
             </div>
             <div className="card-3d-body">
               <div className="card-3d-title">
-                Gửi Đồ / Thuê Tủ <ChevronRight size={18} color="#059669" />
+                {t('home.rent.title')} <ChevronRight size={18} color="#059669" />
               </div>
               <div className="card-3d-subtitle">
-                Lưu trữ hành lý, gửi hàng trực tiếp tại Kiosk
+                {t('home.rent.subtitle')}
               </div>
               <div className="card-3d-badge green">
-                <Package size={12} /> {lockerInfo?.availableBoxes ?? 'Nhiều'} ô trống sẵn sàng
+                <Package size={12} /> {t('home.rent.badge', { n: lockerInfo?.availableBoxes ?? t('home.rent.many') })}
               </div>
             </div>
           </div>
 
         </div>
+      </div>
+
+      <div className="lang-toggle" role="group" aria-label={t('lang.label')}>
+        {LANG_OPTIONS.map(([code, label]) => (
+          <button key={code} type="button" data-lang={code} aria-pressed={lang === code}
+            className={lang === code ? 'active' : ''} onClick={() => chooseLang(code)}>
+            {label}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -386,23 +414,24 @@ function HomeScreen({ go, startLogin, lockerInfo, activeLockerId, setActiveLocke
 // LOGIN (Phone / Email OTP)
 // ============================================
 function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, setPhone, loginMethod, setLoginMethod }) {
+  const { t } = useT();
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
 
   const handleSendEmail = async () => {
-    if (!email || !email.includes('@')) { setMsg('Vui lòng nhập email hợp lệ'); return; }
+    if (!email || !email.includes('@')) { setMsg(t('login.invalidEmail')); return; }
     setLoading(true); setMsg('');
     try {
       console.log('%c[LOGIN] Sending email OTP to:', 'color:#fbbf24', email);
       const res = await api.sendOtp(email);
       if (res.success) go('otp');
-      else setMsg(res.message || 'Lỗi gửi OTP');
-    } catch { setMsg('Lỗi kết nối server'); }
+      else setMsg(res.message || t('login.sendError'));
+    } catch { setMsg(t('common.serverError')); }
     setLoading(false);
   };
 
   const handleSendPhone = async () => {
-    if (!phone || phone.length < 9) { setMsg('Vui lòng nhập số điện thoại hợp lệ'); return; }
+    if (!phone || phone.length < 9) { setMsg(t('login.invalidPhone')); return; }
     setLoading(true); setMsg('');
     try {
       window.confirmationResult = await sendPhoneOtp(toE164Vn(phone));
@@ -416,39 +445,39 @@ function LoginScreen({ go, goHome, purpose = 'boxes', email, setEmail, phone, se
 
   return (
     <div className="screen">
-      <Header onBack={goHome} title={purpose === 'report' ? 'Đăng nhập để báo ô tủ hư' : 'Nhập thông tin'} />
+      <Header onBack={goHome} title={purpose === 'report' ? t('login.titleReport') : t('login.title')} />
       {purpose === 'report' && (
-        <p className="login-purpose"><Wrench size={15} /> Xác thực số điện thoại hoặc email để kỹ thuật viên liên hệ lại khi cần.</p>
+        <p className="login-purpose"><Wrench size={15} /> {t('login.reportPurpose')}</p>
       )}
       <div className="login-tabs">
         <div className={`login-tab ${loginMethod === 'phone' ? 'active' : ''}`} onClick={() => { setLoginMethod('phone'); setMsg(''); }}>
-          <Smartphone size={16} /> Số điện thoại
+          <Smartphone size={16} /> {t('login.phone')}
         </div>
         <div className={`login-tab ${loginMethod === 'email' ? 'active' : ''}`} onClick={() => { setLoginMethod('email'); setMsg(''); }}>
-          <Mail size={16} /> Email
+          <Mail size={16} /> {t('login.email')}
         </div>
       </div>
 
       {loginMethod === 'phone' ? (
         <>
-          <p className="subtitle">Nhập số điện thoại để nhận mã OTP xác thực</p>
+          <p className="subtitle">{t('login.phoneHint')}</p>
           <div className="form-group">
-            <label>Số điện thoại</label>
+            <label>{t('login.phone')}</label>
             <input className="input" type="tel" value={phone} onChange={e => setPhone(e.target.value.replace(/[^0-9+]/g, ''))}
               placeholder="0901234567" inputMode="tel" autoComplete="tel"
               onKeyDown={e => e.key === 'Enter' && handleSendPhone()} />
           </div>
-          <Btn onClick={handleSendPhone} loading={loading}><Smartphone size={18} /> Gửi mã OTP</Btn>
+          <Btn onClick={handleSendPhone} loading={loading}><Smartphone size={18} /> {t('login.sendOtp')}</Btn>
         </>
       ) : (
         <>
-          <p className="subtitle">Nhập email để nhận mã OTP xác thực</p>
+          <p className="subtitle">{t('login.emailHint')}</p>
           <div className="form-group">
-            <label>Email</label>
+            <label>{t('login.email')}</label>
             <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)}
               placeholder="example@gmail.com" autoComplete="email" onKeyDown={e => e.key === 'Enter' && handleSendEmail()} />
           </div>
-          <Btn onClick={handleSendEmail} loading={loading}><Mail size={18} /> Gửi mã OTP</Btn>
+          <Btn onClick={handleSendEmail} loading={loading}><Mail size={18} /> {t('login.sendOtp')}</Btn>
         </>
       )}
       {msg && <Msg type="error" text={msg} />}
@@ -466,6 +495,7 @@ const RESEND_COOLDOWN_SEC = 60;
  * (tránh spam SMS/email và bị Firebase chặn too-many-requests). onResend() trả true nếu gửi thành công.
  */
 function ResendCode({ onResend }) {
+  const { t } = useT();
   const [left, setLeft] = useState(RESEND_COOLDOWN_SEC);
   const [sending, setSending] = useState(false);
 
@@ -484,7 +514,7 @@ function ResendCode({ onResend }) {
 
   return (
     <Btn variant="secondary" onClick={resend} loading={sending} disabled={left > 0} style={{ marginTop: 12 }}>
-      <RefreshCw size={18} /> {left > 0 ? `Gửi lại mã sau ${left}s` : 'Gửi lại mã'}
+      <RefreshCw size={18} /> {left > 0 ? t('otp.resendIn', { s: left }) : t('otp.resend')}
     </Btn>
   );
 }
@@ -493,6 +523,7 @@ function ResendCode({ onResend }) {
 // PHONE OTP (Firebase verification)
 // ============================================
 function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken, setUserName }) {
+  const { t } = useT();
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
@@ -503,7 +534,7 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
     try {
       window.confirmationResult = await sendPhoneOtp(toE164Vn(phone));
       setOtp('');
-      setInfo('Đã gửi mã OTP mới. Mã cũ không còn dùng được.');
+      setInfo(t('otp.phoneResent'));
       return true;
     } catch (err) {
       console.error('Firebase phone OTP resend error:', err);
@@ -513,11 +544,11 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
   };
 
   const handleVerify = async () => {
-    if (otp.length !== 6) { setMsg('Vui lòng nhập đủ 6 số OTP'); return; }
+    if (otp.length !== 6) { setMsg(t('otp.need6')); return; }
     setLoading(true); setMsg('');
     try {
       const confirmation = window.confirmationResult;
-      if (!confirmation) { setMsg('Phiên đã hết hạn. Vui lòng quay lại.'); setLoading(false); return; }
+      if (!confirmation) { setMsg(t('otp.sessionExpired')); setLoading(false); return; }
 
       const userCredential = await confirmation.confirm(otp);
       const idToken = await userCredential.user.getIdToken();
@@ -535,7 +566,7 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
           go(next);
         }
       } else {
-        setMsg(res.message || 'Lỗi đăng nhập');
+        setMsg(res.message || t('otp.loginError'));
       }
     } catch (err) {
       console.error('Phone OTP verify error:', err);
@@ -547,18 +578,18 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
 
   return (
     <div className="screen">
-      <Header onBack={back} title="Xác thực OTP" />
+      <Header onBack={back} title={t('otp.title')} />
       <p className="subtitle">
-        Mã OTP đã gửi đến <strong>{phone}</strong>
+        {t('otp.sentTo', { target: <strong>{phone}</strong> })}
       </p>
       <div className="form-group">
-        <label>Nhập mã OTP 6 số</label>
+        <label>{t('otp.label')}</label>
         <input className="input" value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
           placeholder="123456" maxLength={6} inputMode="numeric"
           style={{ textAlign: 'center', fontSize: 24, letterSpacing: 8, fontWeight: 700 }}
           onKeyDown={e => e.key === 'Enter' && handleVerify()} />
       </div>
-      <Btn onClick={handleVerify} loading={loading}><CheckCircle size={18} /> Xác nhận</Btn>
+      <Btn onClick={handleVerify} loading={loading}><CheckCircle size={18} /> {t('common.confirm')}</Btn>
       <ResendCode onResend={handleResend} />
       {msg && <Msg type="error" text={msg} />}
       {info && !msg && <Msg type="success" text={info} />}
@@ -570,6 +601,7 @@ function PhoneOtpScreen({ go, next = 'boxes', back, phone, setJwt, setTempToken,
 // OTP
 // ============================================
 function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setUserName }) {
+  const { t } = useT();
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
@@ -581,16 +613,16 @@ function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setU
       const res = await api.sendOtp(email);
       if (res.success) {
         setOtp('');
-        setInfo('Đã gửi mã OTP mới vào email. Mã cũ không còn dùng được.');
+        setInfo(t('otp.emailResent'));
         return true;
       }
-      setMsg(res.message || 'Lỗi gửi lại OTP');
-    } catch { setMsg('Lỗi kết nối server'); }
+      setMsg(res.message || t('otp.resendError'));
+    } catch { setMsg(t('common.serverError')); }
     return false;
   };
 
   const handleVerify = async () => {
-    if (otp.length !== 6) { setMsg('Vui lòng nhập đủ 6 số OTP'); return; }
+    if (otp.length !== 6) { setMsg(t('otp.need6')); return; }
     setLoading(true); setMsg(''); setInfo('');
     try {
       const res = await api.verifyOtp(email, otp);
@@ -605,26 +637,26 @@ function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setU
           go(next);
         }
       } else {
-        setMsg(res.message || 'OTP không hợp lệ');
+        setMsg(res.message || t('otp.invalid'));
       }
-    } catch { setMsg('Lỗi kết nối server'); }
+    } catch { setMsg(t('common.serverError')); }
     setLoading(false);
   };
 
   return (
     <div className="screen">
-      <Header onBack={back} title="Xác thực OTP" />
+      <Header onBack={back} title={t('otp.title')} />
       <p className="subtitle">
-        Mã OTP đã gửi đến <strong>{email}</strong>
+        {t('otp.sentTo', { target: <strong>{email}</strong> })}
       </p>
       <div className="form-group">
-        <label>Nhập mã OTP 6 số</label>
+        <label>{t('otp.label')}</label>
         <input className="input" value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
           placeholder="123456" maxLength={6} inputMode="numeric"
           style={{ textAlign: 'center', fontSize: 24, letterSpacing: 8, fontWeight: 700 }}
           onKeyDown={e => e.key === 'Enter' && handleVerify()} />
       </div>
-      <Btn onClick={handleVerify} loading={loading}><CheckCircle size={18} /> Xác nhận</Btn>
+      <Btn onClick={handleVerify} loading={loading}><CheckCircle size={18} /> {t('common.confirm')}</Btn>
       <ResendCode onResend={handleResend} />
       {msg && <Msg type="error" text={msg} />}
       {info && !msg && <Msg type="success" text={info} />}
@@ -636,6 +668,7 @@ function OtpScreen({ go, next = 'boxes', back, email, setJwt, setTempToken, setU
 // REGISTER (Kiosk Quick Register — API 1.4)
 // ============================================
 function RegisterScreen({ go, next = 'boxes', goHome, tempToken, setJwt, setUserName }) {
+  const { t } = useT();
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
   const reqSent = useRef(false);
@@ -650,13 +683,13 @@ function RegisterScreen({ go, next = 'boxes', goHome, tempToken, setJwt, setUser
         const res = await api.kioskQuickRegister(tempToken);
         if (res.success && res.data) {
           setJwt(res.data.accessToken);
-          setUserName('Khách');
+          setUserName(tStatic('register.guest'));
           go(next);
         } else {
-          setMsg(res.message || 'Lỗi đăng ký nhanh');
+          setMsg(res.message || tStatic('register.error'));
         }
       } catch {
-        setMsg('Lỗi kết nối server');
+        setMsg(t('common.serverError'));
       }
       setLoading(false);
     })();
@@ -664,15 +697,15 @@ function RegisterScreen({ go, next = 'boxes', goHome, tempToken, setJwt, setUser
 
   return (
     <div className="screen">
-      <Header onBack={goHome} title="Đăng ký nhanh" />
+      <Header onBack={goHome} title={t('register.title')} />
       {loading && (
         <div style={{ textAlign: 'center', padding: 40 }}>
           <Loader2 size={36} className="spinner" style={{ border: 'none', animation: 'spin 0.6s linear infinite', color: 'var(--accent)' }} />
-          <p style={{ color: 'var(--text-secondary)', marginTop: 16, fontSize: 14 }}>Đang tạo tài khoản...</p>
+          <p style={{ color: 'var(--text-secondary)', marginTop: 16, fontSize: 14 }}>{t('register.creating')}</p>
         </div>
       )}
       {msg && <Msg type="error" text={msg} />}
-      {msg && <Btn onClick={goHome} variant="secondary" style={{ marginTop: 16 }}><ArrowLeft size={18} /> Quay lại</Btn>}
+      {msg && <Btn onClick={goHome} variant="secondary" style={{ marginTop: 16 }}><ArrowLeft size={18} /> {t('common.back')}</Btn>}
     </div>
   );
 }
@@ -715,13 +748,14 @@ function boxPlacement(boxes) {
 
 /** Khung tủ giống tủ thật: thân màu than chì, bãi đáp drone trên nóc, ô lưới không có cửa (chỗ màn hình) thành tấm Lock.R. */
 function Cabinet({ layout, children }) {
+  const { t } = useT();
   if (!layout) return <div className="box-grid auto">{children}</div>;
   return (
     <div className="cabinet" style={{ '--cols': layout.cols, '--rows': layout.rows }}>
       {layout.pad && (
         <div className="cabinet-roof">
           <div className="landing-pad" style={{ gridColumn: `${layout.pad[0]} / ${layout.pad[1] + 1}` }}>
-            <Plane size={13} /> Bãi đáp drone
+            <Plane size={13} /> {t('cabinet.landingPad')}
           </div>
         </div>
       )}
@@ -730,7 +764,7 @@ function Cabinet({ layout, children }) {
           {layout.empty.map(({ r, c }) => (
             <div key={`panel-${r}-${c}`} className="cabinet-panel" style={{ gridRow: r, gridColumn: c }}>
               <strong>Lock<span>.</span>R</strong>
-              <small><Smartphone size={11} /> Màn hình kiosk</small>
+              <small><Smartphone size={11} /> {t('cabinet.screen')}</small>
             </div>
           ))}
           {children}
@@ -742,17 +776,18 @@ function Cabinet({ layout, children }) {
 
 /** Nội dung một cửa ô: số ô lớn, biểu tượng loại ô, nhãn trạng thái có đèn báo. */
 function DoorFace({ box, statusText, selected }) {
+  const { t } = useT();
   const isDrone = box.cellType === 'DRONE' || box.type === 'DRONE';
   const isBig = ['LUGGAGE', 'XL'].includes(box.cellType) || box.type === 'LUGGAGE';
   const Icon = isDrone ? Plane : isBig ? Luggage : Package;
   return (
     <>
       <span className="door-head">
-        <span className="box-number"><small>Ô</small>{box.boxNumber}</span>
+        <span className="box-number"><small>{t('door.prefix')}</small>{box.boxNumber}</span>
         <Icon className="door-icon" size={20} />
       </span>
-      {isBig && <span className="door-kind">Ô lớn · vali</span>}
-      {isDrone && <span className="door-kind">Nhận hàng drone</span>}
+      {isBig && <span className="door-kind">{t('door.big')}</span>}
+      {isDrone && <span className="door-kind">{t('door.drone')}</span>}
       <span className="box-status"><i className="led" />{statusText}</span>
       {selected && <CheckCircle className="door-check" size={22} />}
     </>
@@ -760,6 +795,7 @@ function DoorFace({ box, statusText, selected }) {
 }
 
 function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelectedBox, lockerInfo, activeLockerId, onReportBox }) {
+  const { t } = useT();
   const [boxes, setBoxes] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -801,14 +837,14 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
         }
         setBoxes(mergedBoxes);
       } else {
-        setMsg(boxesRes.message || 'Lỗi tải danh sách ô tủ');
+        setMsg(boxesRes.message || t('boxes.loadError'));
       }
       
       if (ordersRes.success && Array.isArray(ordersRes.data)) {
         setMyOrders(ordersRes.data);
       }
     } catch (e) {
-      setMsg('Lỗi kết nối máy chủ');
+      setMsg(t('common.serverErrorAlt'));
     } finally {
       setLoading(false);
     }
@@ -836,7 +872,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
     try {
       const pinCode = manageBox.order.pinCode;
       if (!pinCode) {
-        notify('Đơn này không còn mã PIN hoạt động. Vui lòng thao tác lại trên app Lock.R.', { tone: 'warn' });
+        notify(t('manage.noPin'), { tone: 'warn' });
         return;
       }
       const unlockRes = await api.unlockBox(
@@ -846,12 +882,12 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
         'PICKUP',
       );
       if (unlockRes.success && unlockRes.data?.accepted) {
-        notify(unlockRes.data?.message || 'Ô đã mở. Vui lòng đóng cửa khi lấy đồ xong.', { tone: 'success', title: `Đã mở ô #${manageBox.box.boxNumber}` });
+        notify(unlockRes.data?.message || t('manage.opened'), { tone: 'success', title: t('manage.openedTitle', { n: manageBox.box.boxNumber }) });
       } else {
-        notify(unlockRes.data?.message || unlockRes.message || 'Không mở được ô, vui lòng thử lại.', { tone: 'error' });
+        notify(unlockRes.data?.message || unlockRes.message || t('manage.openFail'), { tone: 'error' });
       }
     } catch (e) {
-      notify('Không kết nối được máy chủ. Vui lòng thử lại.', { tone: 'error', title: 'Mất kết nối' });
+      notify(t('common.netRetry'), { tone: 'error', title: t('common.netTitle') });
     } finally {
       setManageLoading(false);
     }
@@ -860,29 +896,30 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
   const endManageBox = async () => {
     const order = manageBox.order;
     if (String(order.type || '').toUpperCase() !== 'RENTAL') {
-      notify('Chỉ đơn thuê ô mới kết thúc được tại đây.', { tone: 'warn' });
+      notify(t('manage.rentalOnly'), { tone: 'warn' });
       return;
     }
-    if (!(await ask('Bạn đã lấy hết đồ và đóng cửa ô? Kết thúc thuê sẽ trả ô lại cho hệ thống.', { tone: 'warn', title: 'Kết thúc thuê?', confirmText: 'Kết thúc thuê', cancelText: 'Chưa' }))) return;
+    if (!(await ask(t('manage.endAsk'), { tone: 'warn', title: t('end.title'), confirmText: t('end.confirm'), cancelText: t('end.cancel') }))) return;
     setManageLoading(true);
     try {
       const res = await api.endRental(jwt, order.id);
       if (res.success) {
-        notify('Ô đã được trả lại. Cảm ơn bạn đã dùng Lock.R!', { tone: 'success', title: 'Đã kết thúc thuê' });
+        notify(t('manage.ended'), { tone: 'success', title: t('manage.endedTitle') });
         setManageBox(null);
         await fetchData();
       } else {
-        notify(res.data?.message || res.message || 'Không kết thúc thuê được, vui lòng thử lại.', { tone: 'error' });
+        notify(res.data?.message || res.message || t('manage.endFail'), { tone: 'error' });
       }
     } catch (e) {
-      notify('Không kết nối được máy chủ. Vui lòng thử lại.', { tone: 'error', title: 'Mất kết nối' });
+      notify(t('common.netRetry'), { tone: 'error', title: t('common.netTitle') });
     } finally {
       setManageLoading(false);
     }
   };
 
-  const notImplemented = () => {
-    notify('Gia hạn thuê và ủy quyền người khác lấy hộ hiện thực hiện trên app Lock.R — mở mục Đơn tủ, chọn đơn này.', { tone: 'info', title: 'Thực hiện trên app Lock.R' });
+  // Gia hạn chỉ làm được trên app (thanh toán phần giờ thêm). Ủy quyền người khác lấy hộ đã bỏ khỏi hệ thống.
+  const extendOnApp = () => {
+    notify(t('manage.extendOnApp'), { tone: 'info', title: t('manage.extendOnAppTitle') });
   };
 
   // Ưu tiên dữ liệu box vừa fetch trong màn hình này. `lockerInfo.boxes` từ
@@ -903,11 +940,11 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
   const layout = boxPlacement(displayBoxes);
   // Không có toạ độ thật thì xếp theo số ô cho dễ tìm.
   const orderedBoxes = layout ? displayBoxes : [...displayBoxes].sort((a, b) => (a.boxNumber ?? 0) - (b.boxNumber ?? 0));
-  const selectedKind = selectedBox && (['LUGGAGE', 'XL'].includes(selectedBox.cellType) ? 'Ô lớn (XL)' : 'Ô tiêu chuẩn');
+  const selectedKind = selectedBox && (['LUGGAGE', 'XL'].includes(selectedBox.cellType) ? t('common.kindXl') : t('common.kindStd'));
 
   return (
     <div className="screen screen-boxes">
-      <Header onBack={goHome} title="Chọn ô tủ" />
+      <Header onBack={goHome} title={t('boxes.title')} />
       <div className="boxes-layout">
         <aside className="boxes-side">
           {userName && (
@@ -923,33 +960,33 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
               {lockerInfo.address && <div className="boxes-locker-address">{lockerInfo.address}</div>}
               <div className="boxes-locker-meta">
                 {lockerInfo.code && <span className="boxes-chip">{lockerInfo.code}</span>}
-                <span className="boxes-chip green"><CheckCircle size={13} /> {availableCount} ô trống</span>
-                {displayBoxes.length > 0 && <span className="boxes-chip muted">{displayBoxes.length} ô</span>}
+                <span className="boxes-chip green"><CheckCircle size={13} /> {t('boxes.free', { n: availableCount })}</span>
+                {displayBoxes.length > 0 && <span className="boxes-chip muted">{t('boxes.count', { n: displayBoxes.length })}</span>}
               </div>
             </div>
           )}
 
           <div className="box-legend">
-            <span><i className="lg available" />Trống</span>
-            <span><i className="lg selected" />Đang chọn</span>
-            <span><i className="lg rented" />Đang dùng</span>
-            <span><i className="lg drone" />Drone</span>
-            <span><i className="lg offline" />Lỗi / bảo trì</span>
+            <span><i className="lg available" />{t('boxes.legend.free')}</span>
+            <span><i className="lg selected" />{t('boxes.legend.selected')}</span>
+            <span><i className="lg rented" />{t('boxes.legend.inUse')}</span>
+            <span><i className="lg drone" />{t('boxes.legend.drone')}</span>
+            <span><i className="lg offline" />{t('boxes.legend.fault')}</span>
           </div>
 
           <div className={`box-picked ${selectedBox ? 'on' : ''}`}>
             {selectedBox
-              ? <><Package size={18} /><span>Đã chọn <strong>Ô {selectedBox.boxNumber}</strong> · {selectedKind}</span></>
-              : <span>Chạm vào một ô <strong>Trống</strong> bên cạnh để chọn</span>}
+              ? <><Package size={18} /><span>{t('boxes.picked', { box: <strong>{t('common.boxN', { n: selectedBox.boxNumber })}</strong>, kind: selectedKind })}</span></>
+              : <span>{t('boxes.pickHint', { free: <strong>{t('boxes.legend.free')}</strong> })}</span>}
           </div>
 
           <Btn onClick={() => go('order-info')} disabled={!selectedBox}>
-            Tiếp tục đặt tủ <ChevronRight size={18} />
+            {t('boxes.continue')} <ChevronRight size={18} />
           </Btn>
         </aside>
 
         <section className="boxes-main">
-          {loading && displayBoxes.length === 0 && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />Đang tải...</p>}
+          {loading && displayBoxes.length === 0 && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />{t('common.loading')}</p>}
           {msg && !loading && <Msg type="error" text={msg} />}
 
           <Cabinet layout={layout}>
@@ -964,28 +1001,28 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
           const isAvail = status === 'AVAILABLE' && !isDrone;
           // Chỉ AVAILABLE mới là "Trống". Trạng thái lạ (vd OUT_OF_SERVICE) trước đây rơi về "Trống"
           // nên ô trông như chọn được mà bấm không ăn.
-          let statusText = 'Không dùng được';
+          let statusText = t('boxes.status.unusable');
           let boxClass = 'offline';
 
           if (myOrder) {
-            statusText = 'Ô của bạn';
+            statusText = t('boxes.status.yours');
             boxClass = 'yours';
           } else if (isDrone) {
-            statusText = 'Drone';
+            statusText = t('boxes.status.drone');
             boxClass = 'drone';
           } else if (isAvail) {
-            statusText = 'Trống';
+            statusText = t('boxes.status.free');
             boxClass = 'available';
           } else if (['RENTED', 'OCCUPIED', 'STORING'].includes(status)) {
-            statusText = 'Đang dùng'; boxClass = 'rented';
+            statusText = t('boxes.status.inUse'); boxClass = 'rented';
           } else if (['BOOKED', 'RESERVED'].includes(status)) {
-            statusText = 'Đã đặt'; boxClass = 'booked';
+            statusText = t('boxes.status.booked'); boxClass = 'booked';
           } else if (status === 'FAULT') {
-            statusText = 'Lỗi';
+            statusText = t('boxes.status.fault');
           } else if (status === 'PENDING_CHECK') {
-            statusText = 'Chờ kiểm tra';
+            statusText = t('boxes.status.pendingCheck');
           } else if (['OUT_OF_SERVICE', 'MAINTENANCE', 'OFFLINE'].includes(status)) {
-            statusText = 'Bảo trì';
+            statusText = t('boxes.status.maintenance');
           }
 
           const sel = selectedBox?.boxId === box.boxId;
@@ -996,7 +1033,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
               disabled={!isAvail && !myOrder}
               style={layout?.place.get(box.boxId)}
               className={`box-item ${boxClass} ${sel ? 'selected' : ''}`}>
-              <DoorFace box={box} statusText={sel ? 'Đang chọn' : statusText} selected={sel} />
+              <DoorFace box={box} statusText={sel ? t('boxes.status.selected') : statusText} selected={sel} />
             </button>
           );
         })}
@@ -1009,21 +1046,20 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
         <div className="modal-overlay">
           <div className="modal-content manage-box-modal">
             <button className="close-btn" onClick={() => setManageBox(null)} disabled={manageLoading}><X size={20}/></button>
-            <h3 style={{marginTop: 8, marginBottom: 12}}>Quản lý Ô tủ #{manageBox.box.boxNumber}</h3>
+            <h3 style={{marginTop: 8, marginBottom: 12}}>{t('manage.title', { n: manageBox.box.boxNumber })}</h3>
             <div className="qr-container">
                <QRCodeSVG value={manageBox.order.qrToken || 'qr-placeholder'} size={110} />
                <div className="pin-code-display">
                  {(manageBox.order.pinCode || '').split('').map((char, i) => <span key={i}>{char}</span>)}
                 </div>
-               <p style={{fontSize: 12, color: 'var(--text-muted)'}}>Mã PIN / QR mở tủ của bạn</p>
+               <p style={{fontSize: 12, color: 'var(--text-muted)'}}>{t('manage.qrHint')}</p>
             </div>
             
             <div className="manage-actions">
-               <Btn onClick={unlockManageBox} disabled={manageLoading} style={{marginBottom: 8}}><Unlock size={18}/> Mở tủ</Btn>
-               <Btn onClick={notImplemented} variant="secondary" disabled={manageLoading}><Clock size={18}/> Gia hạn thuê</Btn>
-               <Btn onClick={endManageBox} variant="secondary" disabled={manageLoading}><LogOut size={18}/> Kết thúc thuê & trả ô</Btn>
-               <Btn onClick={notImplemented} variant="secondary" disabled={manageLoading}><Users size={18}/> Ủy quyền người khác lấy hộ</Btn>
-               <Btn onClick={() => onReportBox?.(manageBox.box.boxId)} variant="secondary" disabled={manageLoading}><AlertTriangle size={18}/> Báo ô lỗi</Btn>
+               <Btn onClick={unlockManageBox} disabled={manageLoading} style={{marginBottom: 8}}><Unlock size={18}/> {t('manage.open')}</Btn>
+               <Btn onClick={extendOnApp} variant="secondary" disabled={manageLoading}><Clock size={18}/> {t('manage.extend')}</Btn>
+               <Btn onClick={endManageBox} variant="secondary" disabled={manageLoading}><LogOut size={18}/> {t('manage.end')}</Btn>
+               <Btn onClick={() => onReportBox?.(manageBox.box.boxId)} variant="secondary" disabled={manageLoading}><AlertTriangle size={18}/> {t('manage.report')}</Btn>
             </div>
           </div>
         </div>
@@ -1036,6 +1072,7 @@ function BoxSelectionScreen({ go, goHome, jwt, userName, selectedBox, setSelecte
 // ORDER INFO
 // ============================================
 function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, setOrderCode, setTotalPrice, activeLockerId }) {
+  const { t, lang } = useT();
   const [note, setNote] = useState('');
   const [hours, setHours] = useState(4);
 
@@ -1149,16 +1186,16 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
         setPromoDetail(result.promotion);
         setPromoApplied(true);
       } else {
-        setPromoError(result?.reason || res?.message || 'Mã không hợp lệ');
+        setPromoError(result?.reason || res?.message || t('order.promoInvalid'));
       }
     } catch (err) {
-      setPromoError('Lỗi kiểm tra mã, vui lòng thử lại');
+      setPromoError(t('order.promoCheckError'));
     }
     setPromoLoading(false);
   };
 
   const handleCreate = async () => {
-    if (!selectedBox) { setMsg('Chưa chọn ô tủ'); return; }
+    if (!selectedBox) { setMsg(t('order.noBox')); return; }
     setLoading(true); setMsg('');
     try {
       // Dùng POST /api/orders/rental — gateway gắn X-User-Id từ JWT
@@ -1183,16 +1220,16 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
         setTotalPrice(res.data.totalPrice ?? total);
         go('payment');
       } else {
-        setMsg(res.data?.message || res.message || 'Lỗi tạo đơn hàng. Vui lòng thử lại.');
+        setMsg(res.data?.message || res.message || t('order.createError'));
       }
     } catch (e) {
       console.error('[ORDER] Error:', e);
-      setMsg('Lỗi kết nối server');
+      setMsg(t('common.serverError'));
     }
     setLoading(false);
   };
 
-  const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
+  const fmt = (p) => formatMoney(p, lang);
   // Giá từng mức giờ, cùng công thức với `subtotal` ở trên — để khách so sánh ngay trên nút.
   const priceFor = (h) => (DAILY_RATE > 0
     ? Math.floor(h / 24) * DAILY_RATE + Math.min((h % 24) * HOURLY_RATE, DAILY_RATE)
@@ -1201,17 +1238,17 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
 
   return (
     <div className="screen screen-order">
-      <Header onBack={back} title="Thông tin đặt tủ" />
+      <Header onBack={back} title={t('order.title')} />
       <div className="order-layout">
         <section className="order-form">
           {/* Số giờ thuê */}
           <div className="order-block">
             <div className="order-block-head">
-              <div className="order-block-title"><Clock size={16} /> Thời gian thuê</div>
+              <div className="order-block-title"><Clock size={16} /> {t('order.duration')}</div>
               {maxDays >= 1 && (
                 <div className="mode-toggle" role="tablist">
-                  <button className={!byDay ? 'active' : ''} onClick={() => switchMode(false)}><Clock size={15} /> Theo giờ</button>
-                  <button className={byDay ? 'active' : ''} onClick={() => switchMode(true)}><CalendarDays size={15} /> Theo ngày</button>
+                  <button className={!byDay ? 'active' : ''} onClick={() => switchMode(false)}><Clock size={15} /> {t('order.byHour')}</button>
+                  <button className={byDay ? 'active' : ''} onClick={() => switchMode(true)}><CalendarDays size={15} /> {t('order.byDay')}</button>
                 </div>
               )}
             </div>
@@ -1219,7 +1256,7 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
             <div className="hour-options">
               {(byDay ? dayQuick.map(d => d * 24) : hourQuick).map(h => (
                 <button key={h} className={`hour-option ${hours === h ? 'active' : ''}`} onClick={() => setHours(h)}>
-                  <span className="hour-option-h">{byDay ? `${h / 24} ngày` : `${h} giờ`}</span>
+                  <span className="hour-option-h">{byDay ? t('common.days', { n: h / 24 }) : t('common.hours', { n: h })}</span>
                   <span className="hour-option-p">{fmt(priceFor(h))}</span>
                 </button>
               ))}
@@ -1229,43 +1266,45 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
               <button
                 onClick={() => (byDay ? setDays(days - 1) : setHours(clampHourMode(hours - 1)))}
                 disabled={byDay ? days <= 1 : hours <= limits.min}
-                aria-label={byDay ? 'Bớt 1 ngày' : 'Bớt 1 giờ'}><Minus size={20} /></button>
+                aria-label={byDay ? t('order.lessDay') : t('order.lessHour')}><Minus size={20} /></button>
               <div className="duration-stepper-value">
-                <strong>{byDay ? `${days} ngày` : `${hours} giờ`}</strong>
-                {byDay && <span>{days * 24} giờ</span>}
+                <strong>{byDay ? t('common.days', { n: days }) : t('common.hours', { n: hours })}</strong>
+                {byDay && <span>{t('common.hours', { n: days * 24 })}</span>}
               </div>
               <button
                 onClick={() => (byDay ? setDays(days + 1) : setHours(clampHourMode(hours + 1)))}
                 disabled={byDay ? days >= maxDays : hours >= maxHourMode}
-                aria-label={byDay ? 'Thêm 1 ngày' : 'Thêm 1 giờ'}><Plus size={20} /></button>
+                aria-label={byDay ? t('order.moreDay') : t('order.moreHour')}><Plus size={20} /></button>
             </div>
             <div className="order-rate">
-              Đơn giá {fmt(HOURLY_RATE)}/giờ{DAILY_RATE > 0 && <> · tối đa {fmt(DAILY_RATE)}/ngày</>}
+              {DAILY_RATE > 0
+                ? t('order.rateWithDaily', { hourly: fmt(HOURLY_RATE), daily: fmt(DAILY_RATE) })
+                : t('order.rate', { hourly: fmt(HOURLY_RATE) })}
             </div>
           </div>
 
           <div className="order-row-2">
             {/* Ghi chú */}
             <div className="order-block">
-              <div className="order-block-title"><ClipboardList size={16} /> Ghi chú <span className="order-optional">tuỳ chọn</span></div>
-              <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Quần áo, cần giữ cẩn thận..." />
+              <div className="order-block-title"><ClipboardList size={16} /> {t('order.note')} <span className="order-optional">{t('order.optional')}</span></div>
+              <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder={t('order.notePlaceholder')} />
             </div>
 
             {/* Mã giảm giá */}
             <div className="order-block">
-              <div className="order-block-title"><CreditCard size={16} /> Mã giảm giá <span className="order-optional">tuỳ chọn</span></div>
+              <div className="order-block-title"><CreditCard size={16} /> {t('order.promo')} <span className="order-optional">{t('order.optional')}</span></div>
               <div className="promo-row">
                 <input className="input" value={promoCode} onChange={e => {
                   setPromoCode(e.target.value.toUpperCase());
                   if (promoApplied || promoError) { setPromoApplied(false); setPromoError(''); setPromoDiscount(0); setPromoDetail(null); }
-                }} placeholder="Nhập mã khuyến mãi" style={{ textTransform: 'uppercase' }} disabled={promoApplied || promoLoading} />
+                }} placeholder={t('order.promoPlaceholder')} style={{ textTransform: 'uppercase' }} disabled={promoApplied || promoLoading} />
                 {!promoApplied ? (
                   <button className="btn btn-primary promo-btn" onClick={handleApplyPromo} disabled={!promoCode.trim() || promoLoading}>
-                    {promoLoading ? <Loader2 size={18} style={{ animation: 'spin 0.6s linear infinite' }} /> : 'Áp dụng'}
+                    {promoLoading ? <Loader2 size={18} style={{ animation: 'spin 0.6s linear infinite' }} /> : t('order.apply')}
                   </button>
                 ) : (
                   <button className="btn btn-secondary promo-btn" onClick={clearPromo}>
-                    <X size={18} /> Gỡ mã
+                    <X size={18} /> {t('order.removePromo')}
                   </button>
                 )}
               </div>
@@ -1274,10 +1313,11 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
                 <div className={`promo-msg ${promoBelowMin ? 'warn' : 'ok'}`}>
                   <CheckCircle size={14} />
                   <span>
-                    <strong>{promoDetail.title || promoDetail.name}</strong>
-                    {promoBelowMin
-                      ? <> — cần đơn tối thiểu {fmt(promoMinOrder)}, hãy tăng số giờ thuê hoặc gỡ mã.</>
-                      : <> — đã giảm {fmt(promoDiscount)}</>}
+                    {t(promoBelowMin ? 'order.promoBelowMin' : 'order.promoApplied', {
+                      title: <strong>{promoDetail.title || promoDetail.name}</strong>,
+                      min: fmt(promoMinOrder),
+                      amount: fmt(promoDiscount),
+                    })}
                   </span>
                 </div>
               )}
@@ -1286,31 +1326,31 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
         </section>
 
         <aside className="order-summary">
-          <div className="order-summary-title">Tóm tắt đơn thuê</div>
+          <div className="order-summary-title">{t('order.summary')}</div>
           {selectedBox && (
             <div className="order-summary-box">
               <div className="order-summary-box-icon">
                 {isXl ? <Luggage size={22} /> : <Package size={22} />}
               </div>
               <div>
-                <div className="order-summary-box-no">Ô {selectedBox.boxNumber}</div>
-                <div className="order-summary-box-kind">{isXl ? 'Ô lớn (XL)' : 'Ô tiêu chuẩn'}</div>
+                <div className="order-summary-box-no">{t('common.boxN', { n: selectedBox.boxNumber })}</div>
+                <div className="order-summary-box-kind">{isXl ? t('common.kindXl') : t('common.kindStd')}</div>
               </div>
             </div>
           )}
           <div className="order-summary-rows">
-            <div><span>Thời gian thuê</span><strong>{byDay ? `${days} ngày (${hours} giờ)` : `${hours} giờ`}</strong></div>
-            <div><span>Tiền thuê</span><strong>{fmt(subtotal)}</strong></div>
+            <div><span>{t('order.duration')}</span><strong>{byDay ? `${t('common.days', { n: days })} (${t('common.hours', { n: hours })})` : t('common.hours', { n: hours })}</strong></div>
+            <div><span>{t('order.rentFee')}</span><strong>{fmt(subtotal)}</strong></div>
             {promoApplied && promoDiscount > 0 && (
-              <div className="discount"><span>Khuyến mãi</span><strong>-{fmt(promoDiscount)}</strong></div>
+              <div className="discount"><span>{t('order.discount')}</span><strong>-{fmt(promoDiscount)}</strong></div>
             )}
           </div>
           <div className="order-summary-total">
-            <span>Tổng cộng</span>
+            <span>{t('order.total')}</span>
             <strong>{fmt(total)}</strong>
           </div>
-          <p className="order-summary-note">Giờ thuê bắt đầu tính khi bạn xác nhận đã cất đồ vào ô.</p>
-          <Btn onClick={handleCreate} loading={loading}><ShieldCheck size={18} /> Đặt tủ ngay</Btn>
+          <p className="order-summary-note">{t('order.startNote')}</p>
+          <Btn onClick={handleCreate} loading={loading}><ShieldCheck size={18} /> {t('order.submit')}</Btn>
           {msg && <Msg type="error" text={msg} />}
         </aside>
       </div>
@@ -1326,17 +1366,18 @@ function OrderInfoScreen({ go, back, jwt, selectedBox, setOrderId, setOrderPin, 
 // ============================================
 // Chỉ mở ô khi server báo đơn đã PAID (GET /api/orders/{id}/status → isPaid): client không bao giờ
 // tự coi là đã trả. Mã lỗi theo payment-service (PaymentService.checkout).
-const PAY_ERROR_TEXT = {
-  PAYMENT_METHOD_DISABLED: 'Thanh toán chuyển khoản đang tạm tắt. Vui lòng liên hệ hỗ trợ.',
-  PAYMENT_METHOD_INVALID: 'Phương thức thanh toán không hợp lệ.',
-  ORDER_LOOKUP_FAILED: 'Không lấy được thông tin đơn. Vui lòng thử lại.',
+const PAY_ERROR_KEYS = {
+  PAYMENT_METHOD_DISABLED: 'pay.err.PAYMENT_METHOD_DISABLED',
+  PAYMENT_METHOD_INVALID: 'pay.err.PAYMENT_METHOD_INVALID',
+  ORDER_LOOKUP_FAILED: 'pay.err.ORDER_LOOKUP_FAILED',
 };
-const payErrorText = (res, fallback) => PAY_ERROR_TEXT[res?.code] || res?.message || fallback;
+const payErrorText = (res, fallback) => (PAY_ERROR_KEYS[res?.code] && tStatic(PAY_ERROR_KEYS[res.code])) || res?.message || fallback;
 
 const SEPAY_POLL_MS = 3000;               // hỏi trạng thái đơn mỗi 3 s
 const SEPAY_WAIT_MS = 10 * 60 * 1000;     // chờ chuyển khoản tối đa 10 phút (bấm "Kiểm tra lại" để chờ tiếp)
 
 function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPrice, selectedBox, showSuccess, activeLockerId, pinContact }) {
+  const { t, lang } = useT();
   const [loading, setLoading] = useState('');
   const [msg, setMsg] = useState('');
   const [sepay, setSepay] = useState(null);                // giao dịch VietQR đang chờ: { paymentId, referenceId, amount, qrImage, qrText, payLink }
@@ -1367,7 +1408,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     return () => { aliveRef.current = false; };
   }, []);
 
-  const fmt = (p) => new Intl.NumberFormat('vi-VN').format(p) + 'đ';
+  const fmt = (p) => formatMoney(p, lang);
 
   // Thanh toán được ghi nhận bất đồng bộ (qua sự kiện payment → order), nên phải đợi đơn
   // thật sự PAID rồi mới mở ô — backend từ chối mở ô bỏ hàng khi đơn chưa thanh toán.
@@ -1390,7 +1431,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     if (res.success && res.data?.accepted) {
       setDropOpened(true);
     } else {
-      setMsg(res.data?.message || res.message || 'Lỗi mở tủ');
+      setMsg(res.data?.message || res.message || t('pay.openError'));
     }
   };
 
@@ -1401,7 +1442,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     setLoading('open'); setMsg('');
     try {
       await openForDrop();
-    } catch { setMsg('Lỗi kết nối'); }
+    } catch { setMsg(t('common.netError')); }
     setLoading('');
   };
   openAfterPaidRef.current = openAfterPaid;
@@ -1411,7 +1452,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     if (await waitUntilPaid()) {
       await openAfterPaid();
     } else if (aliveRef.current) {
-      setMsg('Chưa ghi nhận được thanh toán. Vui lòng thử lại sau giây lát.');
+      setMsg(t('pay.notPaidYet'));
     }
   };
 
@@ -1433,7 +1474,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
           payLink: typeof d.paymentUrl === 'string' ? d.paymentUrl : '',
         };
         if (!next.qrImage && !next.qrText && !next.payLink) {
-          setMsg('Không tạo được mã VietQR. Vui lòng chọn cách thanh toán khác.');
+          setMsg(t('pay.qrFailOther'));
         } else {
           setQrImgFailed(false);
           setSepayPhase('waiting');
@@ -1444,9 +1485,9 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
       } else if (res.code === 'ORDER_ALREADY_PAID') {
         await openWhenServerPaid();
       } else {
-        setMsg(payErrorText(res, 'Không tạo được mã VietQR. Vui lòng thử lại.'));
+        setMsg(payErrorText(res, t('pay.qrFail')));
       }
-    } catch { setMsg('Lỗi kết nối'); }
+    } catch { setMsg(t('common.netError')); }
     setLoading('');
   };
 
@@ -1483,8 +1524,8 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
     try {
       const amount = Number(simAmount) > 0 ? Number(simAmount) : undefined;
       const res = await api.simulatePayment(jwt, { paymentId: sepay.paymentId, amount });
-      if (!res?.success) setMsg(payErrorText(res, 'Không giả lập được thanh toán.'));
-    } catch { setMsg('Lỗi kết nối'); }
+      if (!res?.success) setMsg(payErrorText(res, t('pay.simFail')));
+    } catch { setMsg(t('common.netError')); }
     setSimulating(false);
   };
 
@@ -1540,23 +1581,23 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
         goHome={goHome}
         pinNotice={<PinNotice pin={orderPin} contact={pinContact} compact />}
         successExtra={{ orderCode, orderPin, pinContact }}
-        dropDoneMessage="Đã bắt đầu thuê. Dùng mã bên dưới để mở lại ô trong thời gian thuê." />
+        dropDoneMessage={t('pay.dropDone')} />
     );
   }
 
   if (paidConfirmed) {
     return (
       <div className="screen">
-        <Header onBack={goHome} title="Thanh toán" />
+        <Header onBack={goHome} title={t('pay.title')} />
         <div style={{ maxWidth: 450, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Msg type="success" text={`Đã nhận thanh toán cho đơn ${orderCode || `#${orderId}`}.`} />
+          <Msg type="success" text={t('pay.received', { order: orderCode || `#${orderId}` })} />
           <PinNotice pin={orderPin} contact={pinContact} />
           {loading === 'open' ? (
             <p className="polling-status" style={{ justifyContent: 'center', fontSize: 14 }}>
-              <Loader2 size={16} style={{ animation: 'spin 0.6s linear infinite' }} />Đang mở ô tủ #{boxNo}...
+              <Loader2 size={16} style={{ animation: 'spin 0.6s linear infinite' }} />{t('pay.opening', { n: boxNo })}
             </p>
           ) : (
-            <Btn onClick={openAfterPaid}><Unlock size={18} /> Mở ô tủ #{boxNo}</Btn>
+            <Btn onClick={openAfterPaid}><Unlock size={18} /> {t('pay.openBox', { n: boxNo })}</Btn>
           )}
           {msg && <Msg type="error" text={msg} />}
         </div>
@@ -1573,47 +1614,47 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
     return (
       <div className="screen">
-        <Header onBack={handleCancelPayment} title="Chuyển khoản VietQR" />
+        <Header onBack={handleCancelPayment} title={t('pay.vietqr')} />
         <div className="vietqr-pay">
           <div className={`vietqr-code ${showImage || qrValue ? '' : 'idle'}`}>
             {showImage ? (
-              <img src={sepay.qrImage} alt="Mã VietQR" onError={() => setQrImgFailed(true)} />
+              <img src={sepay.qrImage} alt={t('pay.qrAlt')} onError={() => setQrImgFailed(true)} />
             ) : qrValue ? (
               <QRCodeSVG value={qrValue} size={220} level="M" marginSize={2} />
             ) : (
-              <><QrCode size={48} /><span>Không tải được mã QR</span></>
+              <><QrCode size={48} /><span>{t('pay.qrLoadFail')}</span></>
             )}
           </div>
 
           <div className="vietqr-info">
-            <h3>{viaLink ? 'Quét bằng camera điện thoại để mở trang thanh toán' : 'Mở app ngân hàng và quét mã VietQR'}</h3>
+            <h3>{viaLink ? t('pay.scanLink') : t('pay.scanBank')}</h3>
             <div className="vietqr-field">
-              <span>Số tiền</span>
+              <span>{t('pay.amount')}</span>
               <strong>{fmt(sepay.amount)}</strong>
             </div>
             {sepay.referenceId && (
               <div className="vietqr-field">
-                <span>Nội dung chuyển khoản</span>
+                <span>{t('pay.reference')}</span>
                 <code>{sepay.referenceId}</code>
               </div>
             )}
             <p className="vietqr-note">
-              Giữ nguyên số tiền và nội dung chuyển khoản. Kiosk tự mở ô #{boxNo} khi hệ thống nhận được tiền — đã chuyển rồi thì đừng bấm Huỷ.
+              {t('pay.keepNote', { n: boxNo })}
             </p>
 
             {sepayPhase === 'waiting' && (
               <>
                 <div className={`qr-login-timer ${left <= 60 ? 'warn' : ''}`}>
-                  <Clock size={16} /> Chờ thanh toán thêm <strong>{mmss}</strong>
+                  <Clock size={16} /> {t('pay.timeLeft', { time: <strong>{mmss}</strong> })}
                 </div>
-                <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đang chờ xác nhận chuyển khoản...</p>
+                <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />{t('pay.waiting')}</p>
               </>
             )}
             {sepayPhase === 'paid' && (
-              <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />Đã nhận tiền, đang mở ô tủ...</p>
+              <p className="polling-status"><Loader2 size={14} style={{ animation: 'spin 0.6s linear infinite' }} />{t('pay.paidOpening')}</p>
             )}
-            {sepayPhase === 'expired' && <Msg type="error" text="Hết thời gian chờ. Nếu bạn đã chuyển khoản, bấm Kiểm tra lại." />}
-            {sepayPhase === 'failed' && <Msg type="error" text="Giao dịch chuyển khoản không hợp lệ (số tiền không khớp với đơn). Vui lòng liên hệ hỗ trợ Lock.R." />}
+            {sepayPhase === 'expired' && <Msg type="error" text={t('pay.expired')} />}
+            {sepayPhase === 'failed' && <Msg type="error" text={t('pay.failed')} />}
             {msg && <Msg type="error" text={msg} />}
 
             {simEnabled && sepay.paymentId != null && sepayPhase === 'waiting' && (
@@ -1625,17 +1666,17 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
                   placeholder={String(sepay.amount)}
                   value={simAmount}
                   onChange={e => setSimAmount(e.target.value)}
-                  aria-label="Số tiền giả lập"
+                  aria-label={t('pay.simAmount')}
                 />
                 <Btn variant="outline" onClick={simulateSepay} loading={simulating}>
-                  <FlaskConical size={18} /> Giả lập thanh toán (test)
+                  <FlaskConical size={18} /> {t('pay.simulate')}
                 </Btn>
               </div>
             )}
 
             <div className="vietqr-actions">
-              {sepayPhase === 'expired' && <Btn onClick={recheckSepay}><RefreshCw size={18} /> Kiểm tra lại</Btn>}
-              <Btn variant="secondary" onClick={handleCancelPayment} disabled={sepayPhase === 'paid'} loading={canceling}><X size={18} /> Huỷ &amp; Trả lại ô tủ</Btn>
+              {sepayPhase === 'expired' && <Btn onClick={recheckSepay}><RefreshCw size={18} /> {t('pay.recheck')}</Btn>}
+              <Btn variant="secondary" onClick={handleCancelPayment} disabled={sepayPhase === 'paid'} loading={canceling}><X size={18} /> {t('pay.cancelRelease')}</Btn>
             </div>
           </div>
         </div>
@@ -1645,34 +1686,34 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 
   return (
     <div className="screen">
-      <Header onBack={handleCancelPayment} title="Thanh toán" />
+      <Header onBack={handleCancelPayment} title={t('pay.title')} />
       <div style={{ maxWidth: 500, margin: '0 auto', width: '100%' }}>
         <div className="payment-3d-hero">
           <img src={mobilePay3d} alt="Payment" className="payment-3d-img" />
           <div>
             <h3 style={{ fontSize: 16, fontWeight: 800, margin: '0 0 4px 0', color: 'var(--text-primary)' }}>
-              Xác nhận thanh toán
+              {t('pay.confirmTitle')}
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-              Chuyển khoản VietQR để mở ô tủ <strong>#{boxNo}</strong>
+              {t('pay.confirmSub', { box: <strong>#{boxNo}</strong> })}
             </p>
           </div>
         </div>
 
         <div className="order-sum" style={{ marginBottom: 20 }}>
-          <div className="order-row"><ClipboardList size={16} /> Mã đơn: <strong>{orderCode}</strong></div>
-          <div className="order-row"><KeyRound size={16} /> PIN dự phòng: <strong>{orderPin}</strong></div>
-          <div className="order-row"><CreditCard size={16} /> Cước phí: <strong style={{ color: 'var(--accent)', fontSize: 16 }}>{fmt(totalPrice)}</strong></div>
-          {selectedBox && <div className="order-row"><Package size={16} /> Ô tủ được cấp: <strong>#{selectedBox.boxNumber}</strong></div>}
+          <div className="order-row"><ClipboardList size={16} /> {t('pay.orderCode', { code: <strong>{orderCode}</strong> })}</div>
+          <div className="order-row"><KeyRound size={16} /> {t('pay.backupPin', { pin: <strong>{orderPin}</strong> })}</div>
+          <div className="order-row"><CreditCard size={16} /> {t('pay.fee', { fee: <strong style={{ color: 'var(--accent)', fontSize: 16 }}>{fmt(totalPrice)}</strong> })}</div>
+          {selectedBox && <div className="order-row"><Package size={16} /> {t('pay.assignedBox', { box: <strong>#{selectedBox.boxNumber}</strong> })}</div>}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Màn tự tạo mã VietQR khi mở; nút này để tạo lại khi lần tạo trước lỗi. */}
           <Btn onClick={startSepay} loading={loading === 'SEPAY'} disabled={!!loading}>
-            <QrCode size={18} /> Chuyển khoản VietQR
+            <QrCode size={18} /> {t('pay.vietqr')}
           </Btn>
           <Btn variant="outline" onClick={handleCancelPayment} loading={canceling} style={{ borderColor: '#ef4444', color: '#ef4444' }}>
-            <X size={18} /> Hủy đặt &amp; Trả lại ô tủ
+            <X size={18} /> {t('pay.cancelBooking')}
           </Btn>
         </div>
         {msg && <Msg type="error" text={msg} />}
@@ -1688,6 +1729,7 @@ function PaymentScreen({ go, goHome, jwt, orderId, orderPin, orderCode, totalPri
 // RENTAL_ACCESS (ô đang thuê — dùng tiếp hay kết thúc thuê). Hai thao tác này chỉ dùng mã,
 // backend chấp nhận vì ô của đơn vừa được mở thành công.
 function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess, goHome, dropDoneMessage, pinNotice, successExtra }) {
+  const { t } = useT();
   const [loading, setLoading] = useState('');
   const [msg, setMsg] = useState('');
 
@@ -1698,10 +1740,10 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
       if (res.success && res.data?.accepted) {
         showSuccess(title, message || res.data.message, { boxNumber: boxLabel, ...extra });
       } else {
-        setMsg(res.data?.message || res.message || 'Không thực hiện được, vui lòng thử lại');
+        setMsg(res.data?.message || res.message || t('after.fail'));
       }
     } catch {
-      setMsg('Lỗi kết nối server');
+      setMsg(t('common.serverError'));
     }
     setLoading('');
   };
@@ -1711,17 +1753,17 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
   if (nextStep === 'CONFIRM_DROP') {
     return (
       <div className="screen">
-        <Header onBack={goHome} title={`Ô Tủ #${boxLabel}`} />
+        <Header onBack={goHome} title={t('after.title', { n: boxLabel })} />
         <p className="subtitle" style={{ textAlign: 'center' }}>
-          Ô đã mở. Đặt đồ vào ô, <strong>đóng cửa</strong> rồi bấm xác nhận.
+          {t('after.dropHint', { close: <strong>{t('after.dropHintClose')}</strong> })}
         </p>
         <div style={panel}>
           {pinNotice}
-          <Btn onClick={() => run('drop', api.confirmDropWithCode, 'Đã bỏ hàng!', dropDoneMessage, successExtra)} loading={loading === 'drop'}>
-            <CheckCircle size={18} /> Đã bỏ hàng xong
+          <Btn onClick={() => run('drop', api.confirmDropWithCode, t('after.dropped'), dropDoneMessage, successExtra)} loading={loading === 'drop'}>
+            <CheckCircle size={18} /> {t('after.dropDone')}
           </Btn>
           <Btn variant="secondary" onClick={goHome} disabled={!!loading}>
-            Để sau — xác nhận trên ứng dụng
+            {t('after.later')}
           </Btn>
           {msg && <Msg type="error" text={msg} />}
         </div>
@@ -1733,31 +1775,31 @@ function AfterOpenPanel({ nextStep, accessCode, lockerId, boxLabel, showSuccess,
   // chính là "Đóng cửa, tiếp tục thuê" (icon ổ khoá, tiêu đề "Đã mở khóa!") — khách tới lấy đồ bấm nút to
   // nhất, đơn nằm lại STORING. Giờ nút chính là kết thúc thuê, có hỏi lại; nút giữ thuê nói rõ đơn chưa xong.
   const endRental = async () => {
-    if (!(await ask('Bạn đã lấy hết đồ và đóng cửa ô? Kết thúc thuê sẽ trả ô lại cho hệ thống, mã mở ô hết hiệu lực.', {
-      tone: 'warn', title: 'Kết thúc thuê?', confirmText: 'Kết thúc thuê', cancelText: 'Chưa',
+    if (!(await ask(t('after.endAsk'), {
+      tone: 'warn', title: t('end.title'), confirmText: t('end.confirm'), cancelText: t('end.cancel'),
     }))) return;
-    run('end', api.endRentalWithCode, 'Đã kết thúc thuê!', 'Đơn thuê đã hoàn tất, ô đã được trả lại. Cảm ơn bạn đã dùng Lock.R!');
+    run('end', api.endRentalWithCode, t('after.ended'), t('after.endedMsg'));
   };
 
   return (
     <div className="screen">
-      <Header onBack={goHome} title={`Ô Tủ #${boxLabel}`} />
+      <Header onBack={goHome} title={t('after.title', { n: boxLabel })} />
       <p className="subtitle" style={{ textAlign: 'center' }}>
-        Ô đã mở. Lấy hết đồ thì bấm <strong>kết thúc thuê</strong> để hoàn tất đơn — chỉ mở ô thôi thì đơn vẫn đang thuê.
+        {t('after.rentalHint', { end: <strong>{t('after.rentalHintEnd')}</strong> })}
       </p>
       <div style={panel}>
         <Btn onClick={endRental} loading={loading === 'end'}>
-          <LogOut size={18} /> Lấy hết đồ &amp; kết thúc thuê
+          <LogOut size={18} /> {t('after.endBtn')}
         </Btn>
         <Btn
           variant="secondary"
           onClick={() => showSuccess(
-            'Vẫn đang thuê ô',
-            'Đơn thuê chưa kết thúc. Nhớ đóng cửa ô; mã mở ô vẫn dùng được tới khi hết hạn thuê. Khi lấy hết đồ, nhập lại mã và chọn "kết thúc thuê".',
+            t('after.stillTitle'),
+            t('after.stillMsg'),
             { boxNumber: boxLabel },
           )}
           disabled={!!loading}>
-          <Unlock size={18} /> Chỉ lấy/cất đồ — tiếp tục thuê
+          <Unlock size={18} /> {t('after.keepBtn')}
         </Btn>
         {msg && <Msg type="error" text={msg} />}
       </div>
@@ -1770,20 +1812,23 @@ const needsFollowUp = (nextStep) => nextStep === 'CONFIRM_DROP' || nextStep === 
 // ============================================
 // REPORT (báo ô tủ hư)
 // ============================================
+// Khoá i18n của các lý do. Phiếu gửi lên server luôn bằng tiếng Việt (KTV/admin đọc cùng một kiểu câu như
+// trước), dù khách đang xem tiếng Anh; chỉ phần "Mô tả thêm" là chữ khách tự gõ.
 const REPORT_REASONS = [
-  'Cửa ô không mở',
-  'Cửa không đóng / không khoá được',
-  'Ô bị hư hỏng',
-  'Ô bẩn / có mùi lạ',
-  'Màn hình / bàn phím tủ lỗi',
-  'Khác',
+  'report.reason.doorWontOpen',
+  'report.reason.doorWontLock',
+  'report.reason.damaged',
+  'report.reason.dirty',
+  'report.reason.screen',
+  'report.reason.other',
 ];
 const WHOLE_LOCKER = 'LOCKER';
 
 function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initialBoxId, showSuccess }) {
+  const { t } = useT();
   const [boxes, setBoxes] = useState([]);
   const [target, setTarget] = useState(initialBoxId ?? null);   // boxId | WHOLE_LOCKER | null
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState('');   // khoá trong REPORT_REASONS
   const [detail, setDetail] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -1796,9 +1841,9 @@ function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initi
         if (!alive) return;
         if (res.success && Array.isArray(res.data?.cells)) {
           setBoxes(res.data.cells.map(c => ({ ...c, boxId: c.id ?? c.boxId })));
-        } else setMsg(res.message || 'Không tải được sơ đồ tủ');
+        } else setMsg(res.message || t('report.loadError'));
       })
-      .catch(() => { if (alive) setMsg('Không kết nối được máy chủ'); })
+      .catch(() => { if (alive) setMsg(t('report.net')); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeLockerId]);
@@ -1806,7 +1851,10 @@ function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initi
   const layout = boxPlacement(boxes);
   const ordered = layout ? boxes : [...boxes].sort((a, b) => (a.boxNumber ?? 0) - (b.boxNumber ?? 0));
   const targetBox = target && target !== WHOLE_LOCKER ? boxes.find(b => b.boxId === target) : null;
-  const where = target === WHOLE_LOCKER ? 'Cả tủ' : targetBox ? `Ô ${targetBox.boxNumber}` : null;
+  const whereIn = (lang) => (target === WHOLE_LOCKER
+    ? translate(lang, 'report.whole')
+    : targetBox ? translate(lang, 'common.boxN', { n: targetBox.boxNumber }) : null);
+  const where = target === WHOLE_LOCKER ? t('report.whole') : targetBox ? t('common.boxN', { n: targetBox.boxNumber }) : null;
   const canSend = Boolean(target && reason) && !sending;
 
   const submit = async () => {
@@ -1814,64 +1862,68 @@ function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initi
     setSending(true); setMsg('');
     try {
       const note = detail.trim();
+      const reasonVi = translate('vi', reason);
       const res = await api.reportLocker(jwt, activeLockerId, {
-        title: `${where}: ${reason}`,
-        description: note || reason,
+        title: `${whereIn('vi')}: ${reasonVi}`,
+        description: note || reasonVi,
         ...(targetBox ? { boxId: targetBox.boxId } : {}),
       });
       if (res.success && res.data) {
-        showSuccess('Đã gửi báo cáo!', 'Cảm ơn bạn đã báo. Kỹ thuật viên phụ trách tủ sẽ kiểm tra sớm nhất. Bạn theo dõi phiếu trong mục Báo sự cố của app Lock.R.', {
+        showSuccess(t('report.sent'), t('report.sentMsg'), {
           reportCode: res.data.id != null ? `RPT-${res.data.id}` : '',
           boxNumber: targetBox?.boxNumber,
-          boxLabel: 'Ô được báo:',
+          boxLabel: t('report.boxLabel'),
         });
       } else {
-        setMsg(res.data?.message || res.message || 'Không gửi được báo cáo, vui lòng thử lại.');
+        setMsg(res.data?.message || res.message || t('report.sendFail'));
       }
     } catch {
-      setMsg('Không kết nối được máy chủ. Vui lòng thử lại.');
+      setMsg(t('common.netRetry'));
     }
     setSending(false);
   };
 
   return (
     <div className="screen screen-boxes">
-      <Header onBack={goHome} title="Báo ô tủ hư" />
+      <Header onBack={goHome} title={t('report.title')} />
       <div className="boxes-layout">
         <aside className="boxes-side">
           {userName && <div className="user-chip"><User size={15} /><span>{userName}</span></div>}
 
-          <div className="report-step-title"><span>1</span> Chạm vào ô bị hư trên sơ đồ</div>
+          <div className="report-step-title"><span>1</span> {t('report.step1')}</div>
 
           <div className="report-step">
-            <div className="report-step-title"><span>2</span> Vấn đề gặp phải</div>
+            <div className="report-step-title"><span>2</span> {t('report.step2')}</div>
             <div className="report-reasons">
               {REPORT_REASONS.map(r => (
-                <button key={r} className={`report-reason ${reason === r ? 'active' : ''}`} onClick={() => setReason(r)}>{r}</button>
+                <button key={r} className={`report-reason ${reason === r ? 'active' : ''}`} onClick={() => setReason(r)}>{t(r)}</button>
               ))}
             </div>
             {/* input (không phải textarea): bàn phím ảo của kiosk chỉ nhận <input> */}
             <input className="input report-detail" type="text" maxLength={500} value={detail}
-              onChange={e => setDetail(e.target.value)} placeholder="Mô tả thêm (tuỳ chọn)" />
+              onChange={e => setDetail(e.target.value)} placeholder={t('report.detail')} />
           </div>
 
           <div className={`box-picked ${where ? 'on' : ''}`}>
             {where
-              ? <><AlertTriangle size={18} /><span>Báo <strong>{where}</strong>{reason ? <> · {reason}</> : ' — chọn vấn đề'}</span></>
-              : <span>Chạm vào ô bị hư bên cạnh, hoặc chọn <strong>Sự cố cả tủ</strong></span>}
+              ? <><AlertTriangle size={18} /><span>{t(reason ? 'report.pickedReason' : 'report.pickedNoReason', {
+                where: <strong>{where}</strong>,
+                reason: reason ? t(reason) : '',
+              })}</span></>
+              : <span>{t('report.hint', { whole: <strong>{t('report.wholeBtn')}</strong> })}</span>}
           </div>
           {msg && <Msg type="error" text={msg} />}
-          <Btn onClick={submit} loading={sending} disabled={!canSend}><Send size={18} /> Gửi báo cáo</Btn>
+          <Btn onClick={submit} loading={sending} disabled={!canSend}><Send size={18} /> {t('report.send')}</Btn>
         </aside>
 
         <section className="boxes-main">
           <div className="report-locker">
-            <span><MapPin size={15} color="var(--accent)" /> {lockerInfo ? `${lockerInfo.storeName || lockerInfo.name} · ${lockerInfo.code}` : 'Sơ đồ tủ'}</span>
+            <span><MapPin size={15} color="var(--accent)" /> {lockerInfo ? `${lockerInfo.storeName || lockerInfo.name} · ${lockerInfo.code}` : t('report.diagram')}</span>
             <button className={`report-whole ${target === WHOLE_LOCKER ? 'active' : ''}`} onClick={() => setTarget(WHOLE_LOCKER)}>
-              <Lock size={15} /> Sự cố cả tủ
+              <Lock size={15} /> {t('report.wholeBtn')}
             </button>
           </div>
-          {loading && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />Đang tải...</p>}
+          {loading && <p className="boxes-loading"><Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} />{t('common.loading')}</p>}
           <Cabinet layout={layout}>
             {ordered.map(box => {
               const isDrone = box.cellType === 'DRONE';
@@ -1883,7 +1935,7 @@ function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initi
                   className={`box-item report-box ${sel ? 'selected' : ''} ${already ? 'reported' : ''}`}
                   onClick={() => setTarget(box.boxId)}>
                   <DoorFace box={box} selected={sel}
-                    statusText={sel ? 'Đã chọn' : already ? 'Đã có báo lỗi' : isDrone ? 'Ô drone' : 'Chạm để chọn'} />
+                    statusText={sel ? t('report.status.selected') : already ? t('report.status.reported') : isDrone ? t('report.status.drone') : t('report.status.tap')} />
                 </button>
               );
             })}
@@ -1898,6 +1950,7 @@ function ReportScreen({ goHome, jwt, userName, lockerInfo, activeLockerId, initi
 // STAFF
 // ============================================
 function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
+  const { t } = useT();
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
@@ -1918,7 +1971,7 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
   const submitCode = async (typed) => {
     const accessCode = (typed ?? code).trim();
     if (accessCode.length < 6) {
-      setMsg('Vui lòng nhập mã hợp lệ');
+      setMsg(t('staff.invalidCode'));
       return;
     }
     if (submittingRef.current) return;
@@ -1938,24 +1991,24 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
         });
       } else if (res.success && res.data?.accepted) {
         setTimeout(() => showSuccess(
-          'Đã mở khóa!',
-          'Hộp đã được mở. Vui lòng đóng cửa khi xong.',
+          t('staff.unlocked'),
+          t('staff.unlockedMsg'),
           {
-            orderCode: res.data?.orderId ? `Đơn #${res.data.orderId}` : '',
-            boxNumber: res.data?.boxId ? boxNumberOf(res.data.boxId) : 'Thành công'
+            orderCode: res.data?.orderId ? t('staff.orderRef', { id: res.data.orderId }) : '',
+            boxNumber: res.data?.boxId ? boxNumberOf(res.data.boxId) : t('staff.boxUnknown')
           }
         ), 100);
       } else if (res.data?.reasonCode === 'ORDER_LOOKUP_UNAVAILABLE') {
         setRetryable(true);
-        setMsg(res.data.message || 'Hệ thống đang bận, chưa kiểm tra được mã. Vui lòng thử lại.');
+        setMsg(res.data.message || t('staff.busy'));
       } else {
-        setMsg(res.data?.message || res.message || 'Mã không hợp lệ hoặc đã hết hạn');
+        setMsg(res.data?.message || res.message || t('staff.invalidOrExpired'));
         setTimeout(() => setCode(''), 2000);
       }
     } catch (err) {
       console.error('[CODE] Error:', err);
       setRetryable(true);
-      setMsg('Không kết nối được máy chủ, chưa kiểm tra được mã. Vui lòng thử lại.');
+      setMsg(t('staff.netFail'));
     }
     submittingRef.current = false;
     setLoading(false);
@@ -1975,13 +2028,16 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 
   return (
     <div className="screen">
-      <Header onBack={goHome} title="Mở Tủ (OTP / QR)" />
+      <Header onBack={goHome} title={t('staff.title')} />
       <p className="subtitle" style={{ textAlign: 'center' }}>
-        Nhập mã OTP từ App Mobile, mã PIN hoặc mã QR để mở tủ
+        {t('staff.subtitle')}
       </p>
       {lockerInfo && (
         <div style={{ textAlign: 'center', marginTop: -12, marginBottom: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
-          Tủ hiện tại: <strong style={{ color: 'var(--accent)' }}>{lockerInfo.name || lockerInfo.storeName}</strong> ({lockerInfo.code})
+          {t('staff.current', {
+            name: <strong style={{ color: 'var(--accent)' }}>{lockerInfo.name || lockerInfo.storeName}</strong>,
+            code: lockerInfo.code,
+          })}
         </div>
       )}
 
@@ -1998,11 +2054,11 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
             // không phải số nên vẫn đợi Enter như cũ.
             if (/^\d{6}$/.test(value.trim())) submitCode(value);
           }}
-          // Khách chỉ tự gõ PIN 6 số (cả mã uỷ quyền); mã QR 'LLQR…' do máy quét gõ như bàn phím thật,
+          // Khách chỉ tự gõ PIN 6 số; mã QR 'LLQR…' do máy quét gõ như bàn phím thật,
           // nên bàn phím ảo hiện dạng số cho dễ bấm trên màn 7".
           inputMode="numeric"
           autoComplete="off"
-          placeholder="VD: 123456 hoặc LLQR..."
+          placeholder={t('staff.placeholder')}
           style={{
             textAlign: 'center',
             fontSize: 20,
@@ -2018,8 +2074,8 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
       <div style={{ maxWidth: 450, margin: '0 auto', width: '100%' }}>
         <Btn onClick={() => submitCode()} loading={loading} disabled={code.length < 6}>
           {retryable
-            ? <><RefreshCw size={18} /> Thử lại</>
-            : <><Unlock size={18} /> Mở khóa</>}
+            ? <><RefreshCw size={18} /> {t('staff.retry')}</>
+            : <><Unlock size={18} /> {t('staff.unlock')}</>}
         </Btn>
         {msg && <Msg type={retryable ? 'info' : 'error'} text={msg} />}
       </div>
@@ -2031,6 +2087,7 @@ function StaffScreen({ goHome, showSuccess, lockerInfo, activeLockerId }) {
 // SUCCESS SCREEN (Redesigned)
 // ============================================
 function SuccessScreen({ goHome, title, msg, extra, countdown }) {
+  const { t } = useT();
   const hasCard = Boolean(extra && (extra.orderCode || extra.reportCode || extra.boxNumber || extra.orderPin));
   return (
     // Có thẻ thông tin ⇒ 2 cột (màn 1024×600 không đủ cao để xếp dọc hoạt ảnh + tiêu đề + thẻ mã + nút).
@@ -2042,28 +2099,28 @@ function SuccessScreen({ goHome, title, msg, extra, countdown }) {
         <h2 className="success-title">{title}</h2>
         <p className="success-msg">{msg}</p>
         <div className="success-actions">
-          <Btn onClick={goHome} variant="primary"><Home size={20} /> Về trang chủ</Btn>
-          <p className="countdown">Tự động đóng sau <strong>{countdown}</strong> giây</p>
+          <Btn onClick={goHome} variant="primary"><Home size={20} /> {t('success.home')}</Btn>
+          <p className="countdown">{t('success.countdown', { n: <strong>{countdown}</strong>, count: countdown })}</p>
         </div>
       </div>
 
       {hasCard && (
         <div className="extra-card success-card">
           {extra.orderCode && (
-            <div className="success-row"><span>Mã đơn hàng</span><strong>{extra.orderCode}</strong></div>
+            <div className="success-row"><span>{t('success.orderCode')}</span><strong>{extra.orderCode}</strong></div>
           )}
           {extra.reportCode && (
-            <div className="success-row"><span>Mã phiếu sự cố</span><strong>{extra.reportCode}</strong></div>
+            <div className="success-row"><span>{t('success.reportCode')}</span><strong>{extra.reportCode}</strong></div>
           )}
           {extra.boxNumber && (
-            <div className="success-row"><span>{(extra.boxLabel || 'Ô tủ đã mở').replace(/:$/, '')}</span><strong className="box">Ô #{extra.boxNumber}</strong></div>
+            <div className="success-row"><span>{(extra.boxLabel || t('success.boxOpened')).replace(/:$/, '')}</span><strong className="box">{t('common.boxHash', { n: extra.boxNumber })}</strong></div>
           )}
           {extra.orderPin && extra.pinContact && (
             <PinNotice pin={extra.orderPin} contact={extra.pinContact} compact />
           )}
           {extra.orderPin && !extra.pinContact && (
             <div className="success-pin">
-              <span>Mã PIN để mở lại tủ khi nhận đồ</span>
+              <span>{t('success.pinHint')}</span>
               <div className="pin-notice-code">{extra.orderPin}</div>
             </div>
           )}

@@ -4,6 +4,7 @@ import KioskScreen from './screens/KioskScreen';
 import SetupScreen from './screens/SetupScreen';
 import VirtualKeyboard from './components/VirtualKeyboard';
 import * as api from './api';
+import { useT } from './i18n/LangContext.jsx';
 
 const SETUP_POLL_MS = 5000;
 
@@ -42,14 +43,16 @@ function usePairingState() {
 export default function App() {
   const [time, setTime] = useState(new Date());
   const { configured, info } = usePairingState();
+  const { t, lang, locale } = useT();
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const timeStr = time.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-  const dateStr = time.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timeStr = time.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+  // Tiếng Anh ghi tên tháng (27 Nov 2026) để khách nước ngoài không nhầm ngày/tháng.
+  const dateStr = time.toLocaleDateString(locale, { day: '2-digit', month: lang === 'en' ? 'short' : '2-digit', year: 'numeric' });
 
   return (
     <div className="app-shell">
@@ -60,7 +63,7 @@ export default function App() {
         </div>
         <div className="top-bar-status">
           <div className="status-pill online">
-            <div className="dot green"></div> Online
+            <div className="dot green"></div> {t('app.online')}
           </div>
           <div className="top-bar-clock">
             {timeStr} • {dateStr}
