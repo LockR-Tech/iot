@@ -1,5 +1,6 @@
 import { QRCodeSVG } from 'qrcode.react';
 import { Cpu, ScanLine, Wifi } from 'lucide-react';
+import { useT } from '../i18n/LangContext.jsx';
 
 /// Mã QR KTV quét trong app (Lắp đặt tủ › Gán bộ điều khiển) — backend bỏ tiền tố rồi chuẩn hoá MAC.
 export const PAIRING_PREFIX = 'LOCKR-PI:';
@@ -11,14 +12,15 @@ export const PAIRING_PREFIX = 'LOCKR-PI:';
  */
 export default function SetupScreen({ info }) {
   const mac = info?.macAddress || '';
+  const { t } = useT();
   return (
     <div className="kiosk-wrap">
       <div className="setup-card">
         <div className="setup-head">
           <Cpu size={28} />
           <div>
-            <h1>Bộ điều khiển chưa gán vào tủ</h1>
-            <p>Tủ chưa nhận đơn. Kỹ thuật viên quét mã dưới đây để gán bộ điều khiển này vào tủ đang lắp đặt.</p>
+            <h1>{t('setup.title')}</h1>
+            <p>{t('setup.desc')}</p>
           </div>
         </div>
 
@@ -27,7 +29,7 @@ export default function SetupScreen({ info }) {
             {mac ? (
               <QRCodeSVG value={`${PAIRING_PREFIX}${mac}`} size={240} level="M" marginSize={2} />
             ) : (
-              <div className="setup-qr-empty">Đang đọc địa chỉ MAC…</div>
+              <div className="setup-qr-empty">{t('setup.readingMac')}</div>
             )}
             <div className="setup-mac">{mac || '—'}</div>
           </div>
@@ -35,15 +37,15 @@ export default function SetupScreen({ info }) {
           <ol className="setup-steps">
             <li>
               <ScanLine size={18} />
-              <span>Mở app Lock.R (KTV) › <b>Lắp đặt tủ</b> › chọn hồ sơ › <b>Gán bộ điều khiển</b> › quét mã này.</span>
+              <span>{t('setup.step1', { install: <b>{t('setup.step1Install')}</b>, bind: <b>{t('setup.step1Bind')}</b> })}</span>
             </li>
             <li>
               <Wifi size={18} />
-              <span>Pi phải đang có mạng. Quét không được thì chọn đúng MAC ở trên trong danh sách bộ điều khiển online.</span>
+              <span>{t('setup.step2')}</span>
             </li>
             <li>
               <Cpu size={18} />
-              <span>Gán xong, tủ tự cài sơ đồ ô và mở thử từng ô; màn hình này tự chuyển sang màn khách.</span>
+              <span>{t('setup.step3')}</span>
             </li>
           </ol>
         </div>

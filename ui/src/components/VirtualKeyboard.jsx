@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowBigUp, ChevronDown, CornerDownLeft, Delete } from 'lucide-react';
+import { useT } from '../i18n/LangContext.jsx';
 
 // Bàn phím ảo trong trang cho màn cảm ứng của tủ.
 // Chromium chạy --kiosk (toàn màn hình) nên labwc ẩn squeekboard của hệ điều hành — không có
@@ -73,6 +74,7 @@ export default function VirtualKeyboard() {
   const [shift, setShift] = useState(false);
   const kbRef = useRef(null);
   const lastPointer = useRef('');
+  const { t } = useT();
 
   useEffect(() => {
     if (OSK_PARAM === '0') return undefined;
@@ -152,7 +154,7 @@ export default function VirtualKeyboard() {
       <div className="osk osk-numeric" ref={kbRef}>
         <div className="osk-numpad">
           {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(c => <span key={c}>{char(c)}</span>)}
-          <span>{layout === 'tel' ? char('+') : key('Xóa', clearAll, 'fn')}</span>
+          <span>{layout === 'tel' ? char('+') : key(t('osk.clear'), clearAll, 'fn')}</span>
           <span>{char('0')}</span>
           <span>{key(<Delete size={22} />, backspace, 'fn')}</span>
         </div>
@@ -185,7 +187,7 @@ export default function VirtualKeyboard() {
           ? [['_', ''], ['-', ''], ['.com', 'w2'], ['@gmail.com', 'w3']].map(([c, w]) => (
             <span key={c} className={w}>{key(c, el => insertText(el, c))}</span>
           ))
-          : <span className="w7">{key('Khoảng trắng', el => insertText(el, ' '))}</span>}
+          : <span className="w7">{key(t('osk.space'), el => insertText(el, ' '))}</span>}
         <span className="w2">{enterKey('')}</span>
         <span>{hideKey}</span>
       </div>

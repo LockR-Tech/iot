@@ -4,6 +4,8 @@
  *   LOCAL_API    : smart-laundry-locker-iot FastAPI (system state, MQTT logs)
  */
 
+import { getLang } from './i18n/core.js';
+
 // docker-compose maps the gateway to host port 18080 (API_GATEWAY_PORT).
 //
 // VITE_API_URL='' (chuỗi rỗng, không phải unset) => dùng đường dẫn tương đối '/api/...',
@@ -22,7 +24,9 @@ async function req(base, method, path, body = null, token = null, headers = null
   const url = `${base}${path}`;
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    // Ngôn ngữ đang hiện trên kiosk ⇒ backend trả câu thông báo/lỗi tiếng Anh khi `en` (F3-G15). Chỉ là
+    // header của từng request: kiosk KHÔNG gọi PUT /api/user/language, ngôn ngữ đã lưu của tài khoản giữ nguyên.
+    headers: { 'Content-Type': 'application/json', 'X-App-Language': getLang(), ...headers },
   };
   if (token) opts.headers['Authorization'] = `Bearer ${token}`;
   if (body)  opts.body = JSON.stringify(body);

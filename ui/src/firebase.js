@@ -1,5 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
+import { getLang, onLangChange, tStatic } from './i18n/core.js';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -24,13 +25,12 @@ try {
   auth = getAuth(app);
   // SMS OTP của Firebase là mẫu cố định của Google, không sửa được câu chữ — chỉ chọn được ngôn ngữ.
   // 'vi' ⇒ SMS tiếng Việt kèm tên hiển thị của project (Firebase Console → Project settings →
-  // Public-facing name = "Lock.R").
-  auth.languageCode = 'vi';
+  // Public-facing name = "Lock.R"); khách chọn EN trên kiosk ⇒ SMS tiếng Anh.
+  auth.languageCode = getLang();
+  onLangChange((lang) => { auth.languageCode = lang; });
 } catch (err) {
   console.warn('[firebase] Chưa cấu hình Firebase Web app — đăng nhập bằng số điện thoại sẽ không dùng được:', err.message);
 }
-
-const NOT_CONFIGURED_MSG = 'Đăng nhập bằng số điện thoại chưa khả dụng trên kiosk này. Vui lòng dùng Email.';
 
 // reCAPTCHA ẩn gắn vào một div riêng (#recaptcha-container trong index.html, không bao giờ bị React gỡ),
 // KHÔNG gắn vào nút "Gửi mã": gắn vào nút thì vừa reCAPTCHA vừa onClick cùng chạy, nút còn bị khoá và đổi
@@ -62,7 +62,7 @@ function freshRecaptchaElement() {
 }
 
 export function setupRecaptcha() {
-  if (!auth) throw new Error(NOT_CONFIGURED_MSG);
+  if (!auth) throw new Error(tStatic('phone.notConfigured'));
   clearRecaptcha();
   window.recaptchaVerifier = new RecaptchaVerifier(auth, freshRecaptchaElement(), { size: 'invisible' });
   return window.recaptchaVerifier;
@@ -70,7 +70,7 @@ export function setupRecaptcha() {
 
 /** Gửi (hoặc gửi lại) SMS OTP. Trả ConfirmationResult để xác nhận mã. */
 export async function sendPhoneOtp(phoneNumber) {
-  if (!auth) throw new Error(NOT_CONFIGURED_MSG);
+  if (!auth) throw new Error(tStatic('phone.notConfigured'));
   const verifier = setupRecaptcha();
   try {
     return await signInWithPhoneNumber(auth, phoneNumber, verifier);
@@ -88,28 +88,28 @@ export function toE164Vn(phone) {
   return p;
 }
 
-/** Thông báo tiếng Việt cho lỗi Firebase Auth thường gặp khi gửi / xác nhận OTP qua SMS. */
+/** Thông báo (theo ngôn ngữ kiosk) cho lỗi Firebase Auth thường gặp khi gửi / xác nhận OTP qua SMS. */
 export function phoneAuthMessage(err) {
   switch (err?.code) {
     case 'auth/invalid-app-credential':
     case 'auth/captcha-check-failed':
     case 'auth/missing-app-credential':
-      return 'Không xác minh được kiosk (reCAPTCHA). Vui lòng bấm gửi lại sau vài giây.';
+      return tStatic('phone.recaptcha');
     case 'auth/too-many-requests':
-      return 'Số điện thoại này đã yêu cầu quá nhiều mã. Vui lòng thử lại sau ít phút hoặc dùng Email.';
+      return tStatic('phone.tooMany');
     case 'auth/quota-exceeded':
-      return 'Hệ thống tạm hết lượt gửi SMS. Vui lòng dùng Email.';
+      return tStatic('phone.quota');
     case 'auth/invalid-phone-number':
     case 'auth/missing-phone-number':
-      return 'Số điện thoại không hợp lệ.';
+      return tStatic('phone.invalid');
     case 'auth/network-request-failed':
-      return 'Mất kết nối mạng. Vui lòng thử lại.';
+      return tStatic('phone.network');
     case 'auth/invalid-verification-code':
-      return 'Mã OTP không đúng. Vui lòng nhập lại hoặc bấm "Gửi lại mã".';
+      return tStatic('phone.wrongCode');
     case 'auth/code-expired':
-      return 'Mã OTP đã hết hạn. Vui lòng bấm "Gửi lại mã".';
+      return tStatic('phone.expired');
     default:
-      return err?.message || 'Lỗi gửi OTP. Vui lòng thử lại.';
+      return err?.message || tStatic('phone.sendError');
   }
 }
 
