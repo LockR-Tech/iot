@@ -134,11 +134,16 @@ export default function KioskScreen() {
     setSelectedBox(null); setOrderId(null);
     setOrderPin(''); setOrderCode(''); setTotalPrice(0);
     setAfterLogin('boxes'); setReportBoxId(null);
-    // Khách sau luôn bắt đầu bằng tiếng Việt (khách trước có thể đã chọn EN trên màn chính).
-    setLang('vi');
     setScreen('home'); setHistory(['home']);
     if (cdRef.current) clearInterval(cdRef.current);
   }, []);
+
+  // Khách xong lượt (màn thành công tự về / bấm "Về màn hình chính") ⇒ khách sau bắt đầu bằng tiếng Việt.
+  // Nút "Quay lại" giữa chừng (goHome) giữ ngôn ngữ đang chọn.
+  const finishSession = useCallback(() => {
+    setLang('vi');
+    goHome();
+  }, [goHome]);
 
   const showSuccess = useCallback((title, msg, extra = null) => {
     setSuccessTitle(title);
@@ -152,9 +157,9 @@ export default function KioskScreen() {
     cdRef.current = setInterval(() => {
       sec--;
       setCountdown(sec);
-      if (sec <= 0) { clearInterval(cdRef.current); goHome(); }
+      if (sec <= 0) { clearInterval(cdRef.current); finishSession(); }
     }, 1000);
-  }, [go, goHome]);
+  }, [go, finishSession]);
 
   return (
     <div className="kiosk-wrap">
@@ -168,7 +173,7 @@ export default function KioskScreen() {
       {screen === 'order-info' && <OrderInfoScreen go={go} back={back} jwt={jwt} selectedBox={selectedBox} setOrderId={setOrderId} setOrderPin={setOrderPin} setOrderCode={setOrderCode} setTotalPrice={setTotalPrice} activeLockerId={activeLockerId} />}
       {screen === 'payment' && <PaymentScreen go={go} goHome={goHome} jwt={jwt} orderId={orderId} orderPin={orderPin} orderCode={orderCode} totalPrice={totalPrice} selectedBox={selectedBox} showSuccess={showSuccess} activeLockerId={activeLockerId} pinContact={loginMethod === 'email' ? { method: 'email', value: email } : { method: 'phone', value: phone }} />}
       {screen === 'staff' && <StaffScreen goHome={goHome} showSuccess={showSuccess} lockerInfo={lockerInfo} activeLockerId={activeLockerId} />}
-      {screen === 'success' && <SuccessScreen goHome={goHome} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
+      {screen === 'success' && <SuccessScreen goHome={finishSession} title={successTitle} msg={successMsg} extra={successExtra} countdown={countdown} />}
       <DialogHost />
     </div>
   );
